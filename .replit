@@ -36,4 +36,4 @@ externalPort = 80
 [userenv]
 
 [userenv.shared]
-ANTHROPIC_API_KEY = "sk-ant-api03-8SA...FgAA"
+ANTHROPIC_API_KEY = "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"
