@@ -32,3 +32,8 @@ outputType = "webview"
 [[ports]]
 localPort = 5000
 externalPort = 80
+
+[userenv]
+
+[userenv.shared]
+ANTHROPIC_API_KEY = "sk-ant-api03-8SA...FgAA"
