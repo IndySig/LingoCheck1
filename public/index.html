@@ -1,0 +1,309 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>LingoCheck — AI + Human Translation</title>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/react/18.2.0/umd/react.production.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.2.0/umd/react-dom.production.min.js"></script>
+<link href="https://fonts.googleapis.com/css2?family=Playfair+Display:ital,wght@0,400;0,600;1,400&family=DM+Sans:wght@300;400;500&display=swap" rel="stylesheet">
+<style>
+  *{margin:0;padding:0;box-sizing:border-box;}
+  body{background:#1a1030;color:#ede8ff;font-family:'DM Sans',system-ui,sans-serif;font-weight:300;min-height:100vh;}
+  @keyframes spin{to{transform:rotate(360deg)}}
+  @keyframes fadeUp{from{opacity:0;transform:translateY(14px)}to{opacity:1;transform:translateY(0)}}
+  @keyframes pulse{0%,100%{opacity:1}50%{opacity:0.3}}
+  @keyframes glow{0%,100%{box-shadow:0 0 0 0 rgba(124,92,219,0)}50%{box-shadow:0 0 20px 5px rgba(124,92,219,0.18)}}
+  textarea:focus{border-color:rgba(124,92,219,0.55)!important;outline:none;}
+  select option{background:#2a1a58;}
+  button:disabled{opacity:0.5;cursor:not-allowed;}
+  ::-webkit-scrollbar{width:5px;}
+  ::-webkit-scrollbar-thumb{background:rgba(160,130,240,0.3);border-radius:3px;}
+</style>
+</head>
+<body>
+<div id="root"></div>
+<script>
+const {useState,useEffect,useCallback,useRef}=React;
+
+const C={deep:"#1a1030",mid:"#4a2fa0",accent:"#7c5cdb",light:"#a98df0",pale:"#c9b8f8",surface:"#221545",card:"#2a1a58",border:"rgba(160,130,240,0.18)",text:"#ede8ff",muted:"#a094c8",white:"#ffffff",green:"#7dd4a8",greenBg:"rgba(100,200,150,0.07)",greenBorder:"rgba(100,200,150,0.2)",amber:"#e8d080",amberBg:"rgba(255,200,80,0.06)",amberBorder:"rgba(255,200,80,0.15)"};
+const st={card:{background:C.card,border:`1px solid ${C.border}`,borderRadius:20,padding:28},btn:{fontFamily:"inherit",cursor:"pointer",border:"none",borderRadius:12,fontWeight:500,transition:"opacity 0.2s"},label:{fontSize:11,fontWeight:500,letterSpacing:"1.2px",textTransform:"uppercase",color:C.light,marginBottom:10,display:"block"},ta:{width:"100%",background:"rgba(255,255,255,0.04)",border:`1px solid ${C.border}`,borderRadius:12,padding:14,fontFamily:"inherit",fontSize:14,color:C.text,lineHeight:1.7,resize:"vertical",boxSizing:"border-box"},muted:{fontSize:13,color:C.muted}};
+
+function genId(){return Date.now().toString(36)+Math.random().toString(36).slice(2,6);}
+function getClientId(){let id=localStorage.getItem("lc_cid");if(!id){id=genId();localStorage.setItem("lc_cid",id);}return id;}
+
+async function apiFetch(path,opts={}){const r=await fetch(path,{headers:{"Content-Type":"application/json"},...opts});if(!r.ok){const e=await r.json();throw new Error(e.error||"Request failed");}return r.json();}
+
+function Spinner({size=18}){return React.createElement("span",{style:{display:"inline-block",width:size,height:size,border:"2px solid rgba(255,255,255,0.15)",borderTopColor:C.pale,borderRadius:"50%",animation:"spin 0.7s linear infinite",verticalAlign:"middle"}});}
+
+// ══════════════════════════════════════════════════════
+// ROOT
+// ══════════════════════════════════════════════════════
+function App(){
+  const[view,setView]=useState("client");
+  const[jobs,setJobs]=useState([]);
+  const clientId=useRef(getClientId());
+
+  const refresh=useCallback(async()=>{try{const loaded=await apiFetch("/api/jobs");setJobs(loaded);}catch{};},[]);
+  useEffect(()=>{refresh();const t=setInterval(refresh,2500);return()=>clearInterval(t);},[refresh]);
+
+  const createJob=async(job)=>{const j=await apiFetch("/api/jobs",{method:"POST",body:JSON.stringify(job)});setJobs(prev=>[...prev,j]);return j;};
+  const updateJob=async(id,patch)=>{const j=await apiFetch(`/api/jobs/${id}`,{method:"PATCH",body:JSON.stringify(patch)});setJobs(prev=>prev.map(x=>x.id===id?j:x));return j;};
+
+  const myJobs=jobs.filter(j=>j.clientId===clientId.current);
+  const pendingJobs=jobs.filter(j=>j.status==="awaiting_review");
+
+  return React.createElement("div",{style:{background:C.deep,minHeight:"100vh",paddingBottom:60}},
+    view==="client"
+      ?React.createElement(ClientView,{allJobs:jobs,myJobs,clientId:clientId.current,createJob,updateJob,onGoRevisor:()=>setView("revisor")})
+      :React.createElement(RevisorView,{pendingJobs,allJobs:jobs,updateJob,onGoClient:()=>setView("client")})
+  );
+}
+
+// ══════════════════════════════════════════════════════
+// CLIENT VIEW
+// ══════════════════════════════════════════════════════
+function ClientView({allJobs,myJobs,clientId,createJob,updateJob,onGoRevisor}){
+  const[stage,setStage]=useState("idle");
+  const[inputText,setInputText]=useState("");
+  const[language,setLanguage]=useState("Dutch");
+  const[aiResult,setAiResult]=useState("");
+  const[currentJobId,setCurrentJobId]=useState(null);
+  const[error,setError]=useState("");
+  const fileRef=useRef();
+
+  useEffect(()=>{
+    if(!currentJobId||stage==="complete")return;
+    const job=allJobs.find(j=>j.id===currentJobId);
+    if(job?.status==="complete")setStage("complete");
+  },[allJobs,currentJobId,stage]);
+
+  const currentJob=allJobs.find(j=>j.id===currentJobId);
+  const words=inputText.trim().split(/\s+/).filter(Boolean).length;
+
+  async function handleTranslate(){
+    if(!inputText.trim()){setError("Please enter some text first.");return;}
+    setError("");setStage("translating");
+    try{
+      const data=await apiFetch("/api/translate",{method:"POST",body:JSON.stringify({text:inputText.trim(),language})});
+      setAiResult(data.translation);setStage("translated");
+    }catch(e){setError("Translation failed: "+e.message);setStage("idle");}
+  }
+
+  async function handleSend(){
+    const id=genId();
+    await createJob({id,clientId,originalText:inputText.trim(),language,aiTranslation:aiResult,status:"awaiting_review",revisedTranslation:null});
+    setCurrentJobId(id);setStage("sent");
+  }
+
+  function handleReset(){setStage("idle");setInputText("");setAiResult("");setCurrentJobId(null);setError("");}
+
+  function handleFile(e){
+    const file=e.target.files[0];if(!file)return;
+    if(file.size>20000){setError("File too large (max 20KB).");return;}
+    const reader=new FileReader();reader.onload=ev=>setInputText(ev.target.result);reader.readAsText(file);
+  }
+
+  const e=React.createElement;
+
+  const header=e("div",{style:{display:"flex",alignItems:"center",justifyContent:"space-between",padding:"24px 0 32px",borderBottom:`1px solid ${C.border}`,marginBottom:36}},
+    e("div",{style:{fontFamily:"'Playfair Display',serif",fontSize:24,fontWeight:600,color:C.white}},"Lingo",e("span",{style:{color:C.light}},"Check")),
+    e("div",{style:{display:"flex",gap:10}},
+      e("span",{style:{fontSize:11,fontWeight:500,letterSpacing:"1.5px",textTransform:"uppercase",color:C.light,background:"rgba(124,92,219,0.15)",border:"1px solid rgba(124,92,219,0.3)",padding:"6px 14px",borderRadius:20}},"Client Portal"),
+      e("button",{onClick:onGoRevisor,style:{...st.btn,background:"rgba(255,255,255,0.04)",border:`1px solid ${C.border}`,color:C.muted,fontSize:12,padding:"6px 14px"}},"Revisor Panel →")
+    )
+  );
+
+  return e("div",{style:{maxWidth:700,margin:"0 auto",padding:"0 20px"}},header,
+
+    stage==="idle"&&e("div",{style:{animation:"fadeUp 0.4s ease"}},
+      e("h1",{style:{fontFamily:"'Playfair Display',serif",fontSize:38,fontWeight:400,lineHeight:1.2,color:C.white,marginBottom:12,maxWidth:520}},
+        "Translation made ",e("em",{style:{fontStyle:"italic",color:C.pale}},"fast")," and reliable"),
+      e("p",{style:{fontSize:15,color:C.muted,lineHeight:1.7,maxWidth:440,marginBottom:36}},"AI translates instantly. Our human revisor refines every word. Agency quality at a fraction of the cost."),
+      e("div",{style:{display:"flex",background:C.surface,border:`1px solid ${C.border}`,borderRadius:14,padding:"16px 20px",marginBottom:28,alignItems:"center"}},
+        [["📄","Upload","Text or file"],["🤖","AI translates","Seconds"],["💳","Approve","Demo: skip payment"],["👁","Revisor checks","Human quality"],["✅","Delivered","Ready to use"]].map(([icon,lbl,sub],i,arr)=>
+          e("div",{key:i,style:{flex:1,textAlign:"center",position:"relative"}},
+            i<arr.length-1&&e("span",{style:{position:"absolute",right:-4,top:"50%",transform:"translateY(-50%)",color:C.accent,fontSize:13}},"›"),
+            e("div",{style:{fontSize:16,marginBottom:4}},icon),
+            e("div",{style:{fontSize:11,fontWeight:500,color:C.pale}},lbl),
+            e("div",{style:{fontSize:10,color:C.muted,marginTop:2}},sub)
+          )
+        )
+      ),
+      e("div",{style:{...st.card}},
+        e("span",{style:st.label},"Your text"),
+        e("div",{style:{display:"flex",alignItems:"center",gap:10,marginBottom:16}},
+          e("div",{style:{background:"rgba(124,92,219,0.1)",border:`1px solid ${C.border}`,borderRadius:10,padding:"9px 14px",fontSize:13,color:C.muted}},"🇬🇧 English"),
+          e("span",{style:{color:C.accent,fontSize:18}},"→"),
+          e("select",{value:language,onChange:ev=>setLanguage(ev.target.value),style:{flex:1,background:"rgba(124,92,219,0.12)",border:"1px solid rgba(124,92,219,0.35)",borderRadius:10,padding:"9px 14px",fontFamily:"inherit",fontSize:13,fontWeight:500,color:C.white,outline:"none",cursor:"pointer"}},
+            e("option",null,"Dutch"),e("option",null,"Spanish"),e("option",null,"German")
+          )
+        ),
+        e("div",{style:{position:"relative",marginBottom:14}},
+          e("textarea",{style:{...st.ta,minHeight:140},placeholder:'Paste your text here… e.g. "We are looking for a reliable translation partner."',value:inputText,onChange:ev=>setInputText(ev.target.value),maxLength:4000}),
+          e("span",{style:{position:"absolute",bottom:10,right:12,fontSize:11,color:C.muted}},words," words")
+        ),
+        e("div",{style:{display:"flex",alignItems:"center",gap:10,marginBottom:20}},
+          e("input",{ref:fileRef,type:"file",accept:".txt,.md",style:{display:"none"},onChange:handleFile}),
+          e("button",{onClick:()=>fileRef.current.click(),style:{...st.btn,background:"transparent",border:"1px dashed rgba(124,92,219,0.4)",color:C.muted,padding:"8px 14px",fontSize:12}},"📎 Upload .txt"),
+          e("span",{style:{fontSize:11,color:"rgba(160,148,200,0.4)"}},"Supports .txt · max 20 KB")
+        ),
+        error&&e("div",{style:{fontSize:12,color:"#f09090",marginBottom:12}},error),
+        e("button",{onClick:handleTranslate,style:{...st.btn,width:"100%",padding:16,background:`linear-gradient(135deg,${C.mid},${C.accent})`,fontSize:15,color:C.white}},"Translate with LingoCheck")
+      )
+    ),
+
+    stage==="translating"&&e("div",{style:{...st.card,textAlign:"center",padding:"60px 32px",animation:"fadeUp 0.3s ease"}},
+      e("div",{style:{marginBottom:20}},e(Spinner,{size:26})),
+      e("div",{style:{fontFamily:"'Playfair Display',serif",fontSize:24,color:C.white,marginBottom:8}},"AI is translating…"),
+      e("div",{style:st.muted},"Processing your text with our language model")
+    ),
+
+    stage==="translated"&&e("div",{style:{animation:"fadeUp 0.4s ease"}},
+      e("div",{style:{...st.card,marginBottom:14}},
+        e("span",{style:st.label},"Original — English"),
+        e("div",{style:{fontSize:13,color:C.muted,lineHeight:1.75,whiteSpace:"pre-wrap"}},inputText)
+      ),
+      e("div",{style:{...st.card,border:"1px solid rgba(124,92,219,0.4)",marginBottom:16}},
+        e("div",{style:{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:12}},
+          e("span",{style:st.label},"AI Translation — ",language),
+          e("span",{style:{fontSize:11,background:"rgba(124,92,219,0.15)",border:"1px solid rgba(124,92,219,0.25)",color:C.light,borderRadius:20,padding:"3px 10px"}},"AI draft")
+        ),
+        e("div",{style:{fontSize:14,lineHeight:1.8,color:C.text,whiteSpace:"pre-wrap",marginBottom:20}},aiResult),
+        e("div",{style:{display:"grid",gridTemplateColumns:"repeat(3,1fr)",gap:10,marginBottom:18}},
+          [[words,"Words"],[`$${(words*0.04).toFixed(2)}`,`Your price`],[`$${(words*0.125).toFixed(2)}`,"Agency price"]].map(([v,l],i)=>
+            e("div",{key:i,style:{background:"rgba(255,255,255,0.03)",border:`1px solid ${C.border}`,borderRadius:10,padding:"12px 14px",textAlign:"center"}},
+              e("div",{style:{fontFamily:"'Playfair Display',serif",fontSize:20,color:C.pale,marginBottom:3}},v),
+              e("div",{style:{fontSize:11,color:C.muted}},l)
+            )
+          )
+        ),
+        e("div",{style:{background:C.amberBg,border:`1px solid ${C.amberBorder}`,borderRadius:10,padding:"12px 16px",marginBottom:16,fontSize:12,color:C.amber}},"✦  This is an AI draft. Once you approve, our revisor will check and refine every word."),
+        e("button",{onClick:handleSend,style:{...st.btn,width:"100%",padding:16,background:"linear-gradient(135deg,#1a6b3a,#2ea05a)",fontSize:15,color:C.white}},
+          "✓ Approve & Send to Revisor  ·  ",e("span",{style:{opacity:0.7,fontSize:12}},"demo: skip payment")
+        )
+      ),
+      e("button",{onClick:handleReset,style:{...st.btn,background:"transparent",border:`1px solid ${C.border}`,color:C.muted,padding:"8px 16px",fontSize:12}},"← Start over")
+    ),
+
+    stage==="sent"&&e("div",{style:{...st.card,textAlign:"center",padding:"60px 32px",border:"1px solid rgba(124,92,219,0.35)",animation:"glow 3s ease-in-out infinite, fadeUp 0.3s ease"}},
+      e("div",{style:{fontSize:42,marginBottom:18}},"👁"),
+      e("div",{style:{fontFamily:"'Playfair Display',serif",fontSize:26,color:C.white,marginBottom:10}},"Awaiting revisor"),
+      e("div",{style:{...st.muted,maxWidth:340,margin:"0 auto 28px",lineHeight:1.7}},"Your translation has been sent to our revisor. They will check and refine it — you'll be notified the moment it's ready."),
+      e("div",{style:{display:"flex",alignItems:"center",justifyContent:"center",gap:8,color:C.muted,fontSize:12}},
+        e("span",{style:{width:7,height:7,borderRadius:"50%",background:C.light,display:"inline-block",animation:"pulse 1.5s ease-in-out infinite"}}),
+        "Checking for updates every 2 seconds…"
+      )
+    ),
+
+    stage==="complete"&&currentJob&&e("div",{style:{animation:"fadeUp 0.5s ease"}},
+      e("div",{style:{background:C.greenBg,border:`1px solid ${C.greenBorder}`,borderRadius:14,padding:"14px 20px",marginBottom:18,display:"flex",alignItems:"center",gap:10}},
+        e("span",{style:{fontSize:20}},"✅"),
+        e("div",null,
+          e("div",{style:{fontSize:13,fontWeight:500,color:C.green}},"Revisor review complete"),
+          e("div",{style:{fontSize:12,color:C.muted}},"Your translation has been human-verified and is ready to use")
+        )
+      ),
+      e("div",{style:{...st.card,border:`1px solid ${C.greenBorder}`,marginBottom:14}},
+        e("div",{style:{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:14}},
+          e("span",{style:st.label},"Final Translation — ",currentJob.language),
+          e("span",{style:{fontSize:11,background:C.greenBg,border:`1px solid ${C.greenBorder}`,color:C.green,borderRadius:20,padding:"3px 10px"}},"✓ Human reviewed")
+        ),
+        e("div",{style:{fontSize:14,lineHeight:1.8,color:C.text,whiteSpace:"pre-wrap",marginBottom:18}},currentJob.revisedTranslation),
+        e("button",{onClick:()=>navigator.clipboard.writeText(currentJob.revisedTranslation),style:{...st.btn,background:"transparent",border:`1px solid ${C.border}`,color:C.muted,padding:"8px 16px",fontSize:12}},"Copy translation")
+      ),
+      e("button",{onClick:handleReset,style:{...st.btn,background:"transparent",border:`1px solid ${C.border}`,color:C.muted,padding:"8px 16px",fontSize:12}},"← Translate another document")
+    ),
+
+    e("div",{style:{textAlign:"center",marginTop:44,fontSize:10,color:"rgba(160,148,200,0.25)",letterSpacing:"0.5px"}},"LINGOCHECK · AI + HUMAN TRANSLATION · INVESTOR DEMO")
+  );
+}
+
+// ══════════════════════════════════════════════════════
+// REVISOR VIEW
+// ══════════════════════════════════════════════════════
+function RevisorView({pendingJobs,allJobs,updateJob,onGoClient}){
+  const[selectedId,setSelectedId]=useState(null);
+  const[editedText,setEditedText]=useState("");
+  const[sending,setSending]=useState(false);
+  const[lastSent,setLastSent]=useState(false);
+
+  useEffect(()=>{
+    if(pendingJobs.length===0){setSelectedId(null);return;}
+    const newest=pendingJobs[pendingJobs.length-1];
+    if(!selectedId||!pendingJobs.find(j=>j.id===selectedId)){setSelectedId(newest.id);setEditedText(newest.aiTranslation);}
+  },[pendingJobs]);
+
+  const selectedJob=allJobs.find(j=>j.id===selectedId);
+
+  function select(job){setSelectedId(job.id);setEditedText(job.aiTranslation);}
+
+  async function handleSend(){
+    if(!selectedJob||!editedText.trim())return;
+    setSending(true);
+    await updateJob(selectedId,{status:"complete",revisedTranslation:editedText.trim()});
+    setLastSent(true);setSelectedId(null);setSending(false);
+  }
+
+  const timeAgo=ts=>{const s=Math.floor((Date.now()-ts)/1000);if(s<60)return s+"s ago";return Math.floor(s/60)+"m ago";};
+  const e=React.createElement;
+
+  return e("div",{style:{maxWidth:880,margin:"0 auto",padding:"0 20px"}},
+    e("div",{style:{display:"flex",alignItems:"center",justifyContent:"space-between",padding:"24px 0 32px",borderBottom:`1px solid ${C.border}`,marginBottom:32}},
+      e("div",null,
+        e("div",{style:{fontFamily:"'Playfair Display',serif",fontSize:24,fontWeight:600,color:C.white}},"Lingo",e("span",{style:{color:C.light}},"Check")),
+        e("div",{style:{fontSize:12,color:C.muted,marginTop:2}},"Revisor Panel")
+      ),
+      e("div",{style:{display:"flex",alignItems:"center",gap:10}},
+        pendingJobs.length>0&&e("span",{style:{fontSize:11,fontWeight:500,background:"rgba(230,100,100,0.12)",border:"1px solid rgba(230,100,100,0.25)",color:"#f09090",borderRadius:20,padding:"5px 12px"}},pendingJobs.length," pending"),
+        e("button",{onClick:onGoClient,style:{...st.btn,background:"rgba(255,255,255,0.04)",border:`1px solid ${C.border}`,color:C.muted,fontSize:12,padding:"6px 14px"}},"← Client View")
+      )
+    ),
+
+    lastSent&&pendingJobs.length===0&&e("div",{style:{background:C.greenBg,border:`1px solid ${C.greenBorder}`,borderRadius:12,padding:"14px 20px",marginBottom:20,fontSize:13,color:C.green,animation:"fadeUp 0.3s ease"}},"✅  Translation sent to client successfully."),
+
+    pendingJobs.length===0&&e("div",{style:{textAlign:"center",padding:"80px 0"}},
+      e("div",{style:{fontSize:40,marginBottom:18}},"✓"),
+      e("div",{style:{fontFamily:"'Playfair Display',serif",fontSize:24,color:C.white,marginBottom:8}},"No pending reviews"),
+      e("div",{style:st.muted},"New requests will appear here automatically"),
+      e("div",{style:{display:"flex",alignItems:"center",justifyContent:"center",gap:8,marginTop:18,fontSize:11,color:"rgba(160,148,200,0.3)"}},
+        e("span",{style:{width:6,height:6,borderRadius:"50%",background:C.light,display:"inline-block",animation:"pulse 1.5s ease-in-out infinite"}}),
+        "Listening for new requests…"
+      )
+    ),
+
+    pendingJobs.length>0&&e("div",{style:{display:"grid",gridTemplateColumns:selectedJob?"240px 1fr":"1fr",gap:16,alignItems:"start"}},
+      e("div",null,
+        e("span",{style:st.label},"Incoming requests"),
+        pendingJobs.map(job=>e("div",{key:job.id,onClick:()=>select(job),style:{...st.card,padding:16,marginBottom:8,cursor:"pointer",border:`1px solid ${selectedId===job.id?"rgba(124,92,219,0.55)":C.border}`,background:selectedId===job.id?"rgba(124,92,219,0.14)":C.card,transition:"all 0.2s",animation:"fadeUp 0.3s ease"}},
+          e("div",{style:{fontSize:13,fontWeight:500,color:C.text,marginBottom:5}},"EN → ",job.language),
+          e("div",{style:{fontSize:12,color:C.muted,marginBottom:6,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}},job.originalText.substring(0,44),"…"),
+          e("div",{style:{fontSize:11,color:"rgba(160,148,200,0.4)"}},timeAgo(job.createdAt))
+        ))
+      ),
+      selectedJob&&e("div",{style:{animation:"fadeUp 0.3s ease"}},
+        e("span",{style:st.label},"Review & edit translation"),
+        e("div",{style:{...st.card,marginBottom:14}},
+          e("div",{style:{fontSize:11,letterSpacing:"1px",textTransform:"uppercase",color:C.muted,marginBottom:8}},"Original — English"),
+          e("div",{style:{fontSize:13,color:C.muted,lineHeight:1.75,whiteSpace:"pre-wrap"}},selectedJob.originalText)
+        ),
+        e("div",{style:{...st.card,border:"1px solid rgba(124,92,219,0.35)",marginBottom:14}},
+          e("div",{style:{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:10}},
+            e("div",{style:{fontSize:11,letterSpacing:"1px",textTransform:"uppercase",color:C.light}},"AI Translation — ",selectedJob.language),
+            e("div",{style:{fontSize:11,color:C.muted}},"Edit freely below")
+          ),
+          e("textarea",{style:{...st.ta,minHeight:200},value:editedText,onChange:ev=>setEditedText(ev.target.value)})
+        ),
+        e("div",{style:{background:C.amberBg,border:`1px solid ${C.amberBorder}`,borderRadius:10,padding:"11px 14px",marginBottom:14,fontSize:12,color:C.amber}},"✦  Make any corrections, then send to the client."),
+        e("button",{onClick:handleSend,disabled:sending,style:{...st.btn,width:"100%",padding:16,background:"linear-gradient(135deg,#1a6b3a,#2ea05a)",fontSize:15,color:C.white,display:"flex",alignItems:"center",justifyContent:"center",gap:8}},
+          sending?e(React.Fragment,null,e(Spinner,{size:14})," Sending…"):"✓ Send to Client"
+        )
+      )
+    )
+  );
+}
+
+ReactDOM.createRoot(document.getElementById("root")).render(React.createElement(App));
+</script>
+</body>
+</html>
