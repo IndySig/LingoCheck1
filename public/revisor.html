@@ -1,0 +1,578 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>LingoCheck — Revisor Panel</title>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/react/18.2.0/umd/react.production.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.2.0/umd/react-dom.production.min.js"></script>
+<link href="https://fonts.googleapis.com/css2?family=Playfair+Display:ital,wght@0,400;0,600;1,400&family=DM+Sans:wght@300;400;500&display=swap" rel="stylesheet">
+<style>
+  :root{
+    --bg0:#1a1030;
+    --bg1:#120a24;
+    --glow1:rgba(124,92,219,0.22);
+    --glow2:rgba(169,141,240,0.16);
+  }
+  *{margin:0;padding:0;box-sizing:border-box;}
+  body{
+    background:
+      radial-gradient(1100px 700px at 18% 8%, var(--glow1), transparent 60%),
+      radial-gradient(900px 600px at 82% 22%, var(--glow2), transparent 62%),
+      radial-gradient(800px 520px at 55% 92%, rgba(232,208,128,0.10), transparent 60%),
+      linear-gradient(180deg, var(--bg1), var(--bg0));
+    color:#ede8ff;
+    font-family:'DM Sans',system-ui,sans-serif;
+    font-weight:300;
+    min-height:100vh;
+  }
+  @keyframes spin{to{transform:rotate(360deg)}}
+  @keyframes fadeUp{from{opacity:0;transform:translateY(14px)}to{opacity:1;transform:translateY(0)}}
+  @keyframes pulse{0%,100%{opacity:1}50%{opacity:0.3}}
+  a,button{transition:transform .12s ease, box-shadow .18s ease, background .18s ease, border-color .18s ease, opacity .18s ease;}
+  button:not(:disabled):active{transform:translateY(1px) scale(0.99);}
+  a:hover,button:hover{opacity:0.96}
+  textarea:focus{border-color:rgba(124,92,219,0.55)!important;outline:none;}
+  button:disabled{opacity:0.5;cursor:not-allowed;}
+  ::-webkit-scrollbar{width:5px;}
+  ::-webkit-scrollbar-thumb{background:rgba(160,130,240,0.3);border-radius:3px;}
+</style>
+</head>
+<body>
+<div id="root"></div>
+<script>
+const {useState,useEffect,useCallback,useMemo}=React;
+
+const C={deep:"#1a1030",mid:"#4a2fa0",accent:"#7c5cdb",light:"#a98df0",pale:"#c9b8f8",surface:"#221545",card:"#2a1a58",border:"rgba(160,130,240,0.18)",text:"#ede8ff",muted:"#a094c8",white:"#ffffff",green:"#7dd4a8",greenBg:"rgba(100,200,150,0.07)",greenBorder:"rgba(100,200,150,0.2)",amber:"#e8d080",amberBg:"rgba(255,200,80,0.06)",amberBorder:"rgba(255,200,80,0.15)"};
+const st={
+  card:{background:"linear-gradient(180deg, rgba(255,255,255,0.05), rgba(255,255,255,0.03))",backdropFilter:"blur(10px)",border:`1px solid ${C.border}`,borderRadius:20,padding:28,boxShadow:"0 20px 60px rgba(0,0,0,0.20)"},
+  btn:{fontFamily:"inherit",cursor:"pointer",border:"none",borderRadius:12,fontWeight:600,transition:"opacity 0.2s"},
+  label:{fontSize:11,fontWeight:600,letterSpacing:"1.2px",textTransform:"uppercase",color:C.light,marginBottom:10,display:"block"},
+  ta:{width:"100%",background:"rgba(255,255,255,0.04)",border:`1px solid ${C.border}`,borderRadius:12,padding:14,fontFamily:"inherit",fontSize:14,color:C.text,lineHeight:1.7,resize:"vertical",boxSizing:"border-box",boxShadow:"inset 0 1px 0 rgba(255,255,255,0.06)"},
+  muted:{fontSize:13,color:C.muted}
+};
+
+async function apiFetch(path,opts={}){const r=await fetch(path,{headers:{"Content-Type":"application/json"},...opts});const data=await r.json().catch(()=> ({}));if(!r.ok){throw new Error(data.error||"Request failed");}return data;}
+
+function Spinner({size=18}){return React.createElement("span",{style:{display:"inline-block",width:size,height:size,border:"2px solid rgba(255,255,255,0.15)",borderTopColor:C.pale,borderRadius:"50%",animation:"spin 0.7s linear infinite",verticalAlign:"middle"}});}
+
+function splitSentences(text){
+  const t=(text||"").replace(/\s+/g," ").trim();
+  if(!t) return [];
+  try{
+    if(typeof Intl!=="undefined" && Intl.Segmenter){
+      const seg = new Intl.Segmenter("und", { granularity: "sentence" });
+      const out = [];
+      for(const part of seg.segment(t)){
+        const s = String(part.segment||"").trim();
+        if(s) out.push(s);
+      }
+      if(out.length) return out;
+    }
+  }catch{}
+
+  const out = [];
+  const re = /[^.!?]+(?:[.!?]+(?:["'’”)\]]+)?)?(?:\s+|$)/g;
+  let m;
+  while((m = re.exec(t)) !== null){
+    const s = String(m[0]||"").trim();
+    if(s) out.push(s);
+    if(m.index === re.lastIndex) re.lastIndex++;
+  }
+  return out.length ? out : [t];
+}
+
+function alignTranslationToOriginalSentences(origSentences, translationText){
+  const orig = Array.isArray(origSentences) ? origSentences : [];
+  const n = orig.length;
+  if(n === 0) return [];
+  const t = String(translationText||"").trim();
+  if(!t) return Array.from({length:n}, ()=>"");
+
+  const transSentences = splitSentences(t);
+  if(transSentences.length === n) return transSentences;
+
+  const origLens = orig.map(s => Math.max(1, String(s||"").replace(/\s+/g," ").trim().length));
+  const totalOrig = origLens.reduce((a,b)=>a+b,0);
+  const transLens = transSentences.map(s => Math.max(1, String(s||"").length));
+  const totalTrans = transLens.reduce((a,b)=>a+b,0);
+
+  const out = [];
+  let j = 0;
+  for(let i=0;i<n;i++){
+    const remainingSlots = n - i;
+    const remainingSentences = transSentences.length - j;
+    if(remainingSentences <= 0){
+      out.push("");
+      continue;
+    }
+
+    const mustLeave = Math.max(0, remainingSlots - 1);
+    const maxTake = Math.max(1, remainingSentences - mustLeave);
+
+    if(i === n-1){
+      out.push(transSentences.slice(j).join(" "));
+      break;
+    }
+
+    const target = (origLens[i] / totalOrig) * totalTrans;
+    let acc = 0;
+    let take = 0;
+    while(take < maxTake && j + take < transSentences.length){
+      acc += transLens[j + take];
+      take++;
+      if(acc >= target && (transSentences.length - (j + take)) >= mustLeave) break;
+    }
+    out.push(transSentences.slice(j, j + take).join(" "));
+    j += take;
+  }
+  return out.length === n ? out : Array.from({length:n}, (_,i)=>out[i]||"");
+}
+
+function fmtEur(cents){
+  const eur = (cents||0)/100;
+  return eur.toLocaleString(undefined,{style:"currency",currency:"EUR",minimumFractionDigits:2,maximumFractionDigits:2});
+}
+
+function localMonthKey(ts){
+  const d = new Date(ts||Date.now());
+  return d.getFullYear()+"-"+String(d.getMonth()+1).padStart(2,"0");
+}
+
+function localMonthLabel(ts){
+  const d = new Date(ts||Date.now());
+  return d.toLocaleDateString(undefined,{year:"numeric",month:"long"});
+}
+
+function formatDateTime(ts){
+  if(!ts) return "—";
+  return new Date(ts).toLocaleString();
+}
+
+function RevisorApp(){
+  const[ready,setReady]=useState(false);
+  const[authErr,setAuthErr]=useState("");
+  const[me,setMe]=useState(null);
+  const[allJobs,setAllJobs]=useState([]);
+  const[tab,setTab]=useState("queue"); // queue | mine | finance
+
+  const refresh=useCallback(async()=>{
+    try{
+      const loaded=await apiFetch("/api/jobs");
+      setAllJobs(loaded);
+    }catch{}
+  },[]);
+
+  useEffect(()=>{
+    let cancelled=false;
+    let timer=null;
+    (async()=>{
+      try{
+        const meResp=await apiFetch("/api/auth/me",{method:"GET"});
+        if(!meResp.authenticated){location.href="/login";return;}
+        if(cancelled) return;
+        setMe(meResp);
+        setReady(true);
+        refresh();
+        timer=setInterval(refresh,2500);
+      }catch(e){
+        setAuthErr(e.message);
+      }
+    })();
+    return ()=>{cancelled=true; if(timer) clearInterval(timer);};
+  },[refresh]);
+
+  async function logout(){
+    try{await apiFetch("/api/auth/logout",{method:"POST"});}catch{}
+    location.href="/login";
+  }
+
+  const updateJob=async(id,patch)=>apiFetch(`/api/revisor/jobs/${id}`,{method:"PATCH",body:JSON.stringify(patch)})
+    .then(j=>{setAllJobs(prev=>prev.map(x=>x.id===id?j:x));return j;});
+
+  async function claimJob(id){
+    const j=await apiFetch(`/api/revisor/jobs/${id}/claim`,{method:"POST"});
+    setAllJobs(prev=>prev.map(x=>x.id===id?j:x));
+    return j;
+  }
+
+  if(authErr){
+    return React.createElement("div",{style:{maxWidth:640,margin:"0 auto",padding:"60px 20px",textAlign:"center"}},
+      React.createElement("div",{style:{...st.card}},React.createElement("div",{style:{fontSize:12,color:"#f09090"}},authErr))
+    );
+  }
+  if(!ready||!me){
+    return React.createElement("div",{style:{maxWidth:640,margin:"0 auto",padding:"60px 20px",textAlign:"center"}},
+      React.createElement("div",{style:{...st.card}},React.createElement(Spinner,{size:24}),React.createElement("div",{style:{marginTop:10,fontSize:13,color:C.muted}},"Loading revisor panel…"))
+    );
+  }
+
+  return React.createElement(RevisorView,{me,allJobs,tab,setTab,updateJob,claimJob,onLogout:logout});
+}
+
+function Header({me,tab,setTab,onLogout,counts}){
+  const e=React.createElement;
+  function tabBtn(id,label,badge){
+    const active=tab===id;
+    return e("button",{onClick:()=>setTab(id),style:{...st.btn,padding:"8px 14px",fontSize:13,background:active?"rgba(124,92,219,0.22)":"rgba(255,255,255,0.04)",border:`1px solid ${active?"rgba(124,92,219,0.45)":C.border}`,color:active?C.pale:C.muted,display:"inline-flex",alignItems:"center",gap:8}},
+      label,
+      typeof badge==="number"&&badge>0&&e("span",{style:{fontSize:11,fontWeight:600,background:"rgba(255,255,255,0.10)",borderRadius:999,padding:"1px 8px",color:C.text}},badge)
+    );
+  }
+  return e("div",{style:{display:"flex",alignItems:"center",justifyContent:"space-between",padding:"24px 0 24px",borderBottom:`1px solid ${C.border}`,marginBottom:24,gap:16,flexWrap:"wrap"}},
+    e("div",null,
+      e("div",{style:{fontFamily:"'Playfair Display',serif",fontSize:24,fontWeight:600,color:C.white}},"Lingo",e("span",{style:{color:C.light}},"Check")),
+      e("div",{style:{fontSize:12,color:C.muted,marginTop:2}},"Revisor Panel · ",e("span",{style:{color:C.pale}},me.displayName||me.username))
+    ),
+    e("div",{style:{display:"flex",alignItems:"center",gap:8,flexWrap:"wrap"}},
+      tabBtn("queue","Queue",counts.queue),
+      tabBtn("mine","My assignments",counts.mine),
+      tabBtn("finance","Finance"),
+      e("button",{onClick:onLogout,style:{...st.btn,background:"rgba(255,255,255,0.04)",border:`1px solid ${C.border}`,color:C.muted,fontSize:12,padding:"8px 14px"}},"Logout")
+    )
+  );
+}
+
+function QueueTab({me,allJobs,claimJob,setTab}){
+  const e=React.createElement;
+  const [claimingId,setClaimingId]=useState(null);
+  const [err,setErr]=useState("");
+
+  const queue=useMemo(()=>allJobs
+    .filter(j=>j.status==="awaiting_review" && !j.claimedByRevisorId)
+    .sort((a,b)=>(a.createdAt||0)-(b.createdAt||0))
+  ,[allJobs]);
+
+  async function onClaim(id){
+    setErr("");
+    setClaimingId(id);
+    try{
+      await claimJob(id);
+      setTab("mine");
+    }catch(ex){
+      setErr(ex.message);
+    }finally{
+      setClaimingId(null);
+    }
+  }
+
+  if(queue.length===0){
+    return e("div",{style:{textAlign:"center",padding:"80px 0"}},
+      e("div",{style:{fontSize:40,marginBottom:18}},"✓"),
+      e("div",{style:{fontFamily:"'Playfair Display',serif",fontSize:24,color:C.white,marginBottom:8}},"No jobs waiting"),
+      e("div",{style:st.muted},"New unclaimed requests will appear here automatically"),
+      e("div",{style:{display:"flex",alignItems:"center",justifyContent:"center",gap:8,marginTop:18,fontSize:11,color:"rgba(160,148,200,0.3)"}},
+        e("span",{style:{width:6,height:6,borderRadius:"50%",background:C.light,display:"inline-block",animation:"pulse 1.5s ease-in-out infinite"}}),
+        "Listening for new requests…"
+      )
+    );
+  }
+
+  return e("div",null,
+    e("span",{style:st.label},"Available jobs · claim to start working"),
+    err&&e("div",{style:{margin:"0 0 12px",fontSize:12,color:"#f09090"}},err),
+    e("div",{style:{display:"grid",gridTemplateColumns:"1fr",gap:12}},
+      queue.map(job=>e("div",{key:job.id,style:{...st.card,padding:18,animation:"fadeUp 0.3s ease",display:"grid",gridTemplateColumns:"1fr auto",gap:16,alignItems:"center"}},
+        e("div",null,
+          e("div",{style:{fontSize:13,fontWeight:600,color:C.text,marginBottom:6}},"EN → ",job.language,
+            typeof job.sourceWordCount==="number"&&e("span",{style:{marginLeft:10,fontSize:11,fontWeight:500,color:C.muted}}, job.sourceWordCount," words")
+          ),
+          e("div",{style:{fontSize:12,color:C.muted,lineHeight:1.6,maxHeight:60,overflow:"hidden"}},(job.originalText||"").substring(0,260),(job.originalText||"").length>260?"…":""),
+          e("div",{style:{fontSize:11,color:"rgba(160,148,200,0.5)",marginTop:8}},"Submitted ",formatDateTime(job.createdAt))
+        ),
+        e("button",{onClick:()=>onClaim(job.id),disabled:claimingId===job.id,style:{...st.btn,padding:"12px 18px",background:"linear-gradient(135deg,"+C.mid+","+C.accent+")",color:C.white,fontSize:13,whiteSpace:"nowrap"}},
+          claimingId===job.id?e(React.Fragment,null,e(Spinner,{size:14})," Claiming…"):"Claim job"
+        )
+      ))
+    )
+  );
+}
+
+function ReviewEditor({selectedJob,updateJob,onDone}){
+  const e=React.createElement;
+  const[editedText,setEditedText]=useState(selectedJob.revisedTranslation||selectedJob.aiTranslation||"");
+  const[mode,setMode]=useState("full");
+  const[editedSentences,setEditedSentences]=useState([]);
+  const[sending,setSending]=useState(false);
+  const[isWide,setIsWide]=useState(()=>window.matchMedia && window.matchMedia("(min-width: 900px)").matches);
+
+  useEffect(()=>{
+    if(!window.matchMedia) return;
+    const mq = window.matchMedia("(min-width: 900px)");
+    const onChange = () => setIsWide(!!mq.matches);
+    onChange();
+    if(mq.addEventListener) mq.addEventListener("change", onChange);
+    else mq.addListener(onChange);
+    return () => {
+      if(mq.removeEventListener) mq.removeEventListener("change", onChange);
+      else mq.removeListener(onChange);
+    };
+  },[]);
+
+  useEffect(()=>{
+    setEditedText(selectedJob.revisedTranslation||selectedJob.aiTranslation||"");
+    const orig = splitSentences(selectedJob.originalText);
+    const initial = alignTranslationToOriginalSentences(orig, selectedJob.revisedTranslation||selectedJob.aiTranslation);
+    setEditedSentences(initial);
+    setMode("full");
+  },[selectedJob.id]);
+
+  async function handleSend(){
+    const finalText = mode==="sentences"
+      ? (editedSentences||[]).map(s=>String(s||"").trim()).filter(Boolean).join(" ")
+      : (editedText||"").trim();
+    if(!finalText) return;
+    setSending(true);
+    try{
+      await updateJob(selectedJob.id,{status:"complete",revisedTranslation:finalText});
+      onDone&&onDone();
+    }catch(ex){
+      alert(ex.message);
+    }finally{
+      setSending(false);
+    }
+  }
+
+  const paneHeight = isWide ? 420 : undefined;
+
+  return e("div",{style:{animation:"fadeUp 0.3s ease"}},
+    e("span",{style:st.label},"Review & edit translation"),
+    e("div",{style:{display:"flex",alignItems:"center",justifyContent:"space-between",margin:"0 0 10px",flexWrap:"wrap",gap:10}},
+      e("div",{style:{fontSize:12,color:C.muted}},"Mode:"),
+      e("div",{style:{display:"flex",gap:8}},
+        e("button",{onClick:()=>setMode("full"),style:{...st.btn,background:mode==="full"?"rgba(124,92,219,0.22)":"rgba(255,255,255,0.04)",border:`1px solid ${mode==="full"?"rgba(124,92,219,0.45)":C.border}`,color:mode==="full"?C.pale:C.muted,fontSize:12,padding:"6px 10px"}},"Full text"),
+        e("button",{onClick:()=>setMode("sentences"),style:{...st.btn,background:mode==="sentences"?"rgba(124,92,219,0.22)":"rgba(255,255,255,0.04)",border:`1px solid ${mode==="sentences"?"rgba(124,92,219,0.45)":C.border}`,color:mode==="sentences"?C.pale:C.muted,fontSize:12,padding:"6px 10px"}},"Sentence-by-sentence")
+      )
+    ),
+    mode==="full"
+      ?e("div",{style:{display:"grid",gridTemplateColumns:isWide?"1fr 1fr":"1fr",gap:14,alignItems:"stretch",marginBottom:14}},
+        e("div",{style:{...st.card,marginBottom:0,display:"flex",flexDirection:"column"}},
+          e("div",{style:{fontSize:11,letterSpacing:"1px",textTransform:"uppercase",color:C.muted,marginBottom:8}},"Original — English"),
+          e("div",{style:{fontSize:13,color:C.muted,lineHeight:1.75,whiteSpace:"pre-wrap",overflow:"auto",flex:1,maxHeight:paneHeight,paddingRight:6}},selectedJob.originalText)
+        ),
+        e("div",{style:{...st.card,border:"1px solid rgba(124,92,219,0.35)",marginBottom:0,display:"flex",flexDirection:"column"}},
+          e("div",{style:{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:10}},
+            e("div",{style:{fontSize:11,letterSpacing:"1px",textTransform:"uppercase",color:C.light}},"Editable translation — ",selectedJob.language),
+            e("div",{style:{fontSize:11,color:C.muted}},"Edit freely")
+          ),
+          e("textarea",{style:{...st.ta,flex:1,minHeight:paneHeight||220,height:paneHeight||"auto",resize:"vertical"},value:editedText,onChange:ev=>setEditedText(ev.target.value)})
+        )
+      )
+      :e("div",{style:{...st.card,padding:18,marginBottom:14}},
+        e("div",{style:{display:"grid",gridTemplateColumns:isWide?"1fr 1fr":"1fr",gap:12,alignItems:"start"}},
+          e("div",{style:{fontSize:11,letterSpacing:"1px",textTransform:"uppercase",color:C.muted,marginBottom:isWide?0:6}},"Original — English"),
+          e("div",{style:{fontSize:11,letterSpacing:"1px",textTransform:"uppercase",color:C.light,marginBottom:isWide?0:12}},"Editable — ",selectedJob.language)
+        ),
+        splitSentences(selectedJob.originalText).map((origSentence, idx)=>{
+          const val = editedSentences[idx] ?? "";
+          return e("div",{key:idx,style:{display:"grid",gridTemplateColumns:isWide?"1fr 1fr":"1fr",gap:12,marginTop:10,paddingTop:10,borderTop:`1px solid ${C.border}`}},
+            e("div",{style:{fontSize:13,color:C.muted,lineHeight:1.75,whiteSpace:"pre-wrap"}},origSentence),
+            e("textarea",{style:{...st.ta,minHeight:90},value:val,onChange:ev=>{
+              const next=[...editedSentences];
+              next[idx]=ev.target.value;
+              setEditedSentences(next);
+            }})
+          );
+        })
+      ),
+    e("div",{style:{background:C.amberBg,border:`1px solid ${C.amberBorder}`,borderRadius:10,padding:"11px 14px",marginBottom:14,fontSize:12,color:C.amber}},"✦  Make any corrections, then send to the client."),
+    e("button",{onClick:handleSend,disabled:sending,style:{...st.btn,width:"100%",padding:16,background:"linear-gradient(135deg,#1a6b3a,#2ea05a)",fontSize:15,color:C.white,display:"flex",alignItems:"center",justifyContent:"center",gap:8}},
+      sending?e(React.Fragment,null,e(Spinner,{size:14})," Sending…"):"✓ Send to Client"
+    )
+  );
+}
+
+function MyAssignmentsTab({me,allJobs,updateJob}){
+  const e=React.createElement;
+  const[selectedId,setSelectedId]=useState(null);
+  const[justSent,setJustSent]=useState(false);
+  const[showList,setShowList]=useState(true);
+
+  const mine=useMemo(()=>allJobs
+    .filter(j=>j.claimedByRevisorId===me.revisorId || j.completedByRevisorId===me.revisorId)
+    .sort((a,b)=>{
+      const aActive = a.status!=="complete" ? 1 : 0;
+      const bActive = b.status!=="complete" ? 1 : 0;
+      if(aActive!==bActive) return bActive-aActive;
+      const aTs = a.completedAt||a.claimedAt||a.createdAt||0;
+      const bTs = b.completedAt||b.claimedAt||b.createdAt||0;
+      return bTs-aTs;
+    })
+  ,[allJobs,me.revisorId]);
+
+  useEffect(()=>{
+    if(selectedId && !mine.find(j=>j.id===selectedId)) setSelectedId(null);
+  },[mine,selectedId]);
+
+  useEffect(()=>{
+    if(selectedId) setShowList(false);
+    else setShowList(true);
+  },[selectedId]);
+
+  const selectedJob=mine.find(j=>j.id===selectedId);
+
+  if(mine.length===0){
+    return e("div",{style:{textAlign:"center",padding:"80px 0"}},
+      e("div",{style:{fontSize:40,marginBottom:18}},"📋"),
+      e("div",{style:{fontFamily:"'Playfair Display',serif",fontSize:24,color:C.white,marginBottom:8}},"No assignments yet"),
+      e("div",{style:st.muted},"Claim a job from the Queue to get started.")
+    );
+  }
+
+  function listItem(job){
+    const isComplete=job.status==="complete";
+    const isSelected=selectedId===job.id;
+    return e("div",{key:job.id,onClick:()=>setSelectedId(job.id),style:{...st.card,padding:14,marginBottom:8,cursor:"pointer",border:`1px solid ${isSelected?"rgba(124,92,219,0.55)":C.border}`,background:isSelected?"rgba(124,92,219,0.14)":undefined,transition:"all 0.2s",animation:"fadeUp 0.3s ease"}},
+      e("div",{style:{display:"flex",alignItems:"center",justifyContent:"space-between",gap:8,marginBottom:6}},
+        e("div",{style:{fontSize:13,fontWeight:600,color:C.text}},"EN → ",job.language),
+        e("span",{style:{fontSize:10,fontWeight:600,letterSpacing:"0.6px",textTransform:"uppercase",padding:"3px 8px",borderRadius:999,background:isComplete?C.greenBg:C.amberBg,border:`1px solid ${isComplete?C.greenBorder:C.amberBorder}`,color:isComplete?C.green:C.amber}},isComplete?"Completed":"In progress")
+      ),
+      e("div",{style:{fontSize:12,color:C.muted,marginBottom:6,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}},(job.originalText||"").substring(0,60),"…"),
+      e("div",{style:{fontSize:11,color:"rgba(160,148,200,0.5)"}},
+        typeof job.sourceWordCount==="number"?job.sourceWordCount+" words · ":"",
+        isComplete?("Completed "+formatDateTime(job.completedAt)):("Claimed "+formatDateTime(job.claimedAt))
+      )
+    );
+  }
+
+  return e("div",{style:{display:"grid",gridTemplateColumns:(selectedJob&&!showList)?"1fr":(selectedJob?"260px 1fr":"1fr"),gap:16,alignItems:"start"}},
+    (showList||!selectedJob)&&e("div",null,
+      e("div",{style:{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:8}},
+        e("span",{style:st.label},"My assignments"),
+        selectedJob&&e("button",{onClick:()=>setShowList(false),title:"Hide list",style:{...st.btn,background:"rgba(255,255,255,0.04)",border:`1px solid ${C.border}`,color:C.muted,fontSize:11,padding:"4px 10px"}},"Hide")
+      ),
+      mine.map(listItem)
+    ),
+    selectedJob&&!showList&&e("div",{style:{marginBottom:8}},
+      e("button",{onClick:()=>{setSelectedId(null);setShowList(true);},style:{...st.btn,background:"rgba(255,255,255,0.04)",border:`1px solid ${C.border}`,color:C.muted,fontSize:12,padding:"6px 12px",marginBottom:12}},"← Back to list")
+    ),
+    selectedJob
+      ? e("div",null,
+          justSent&&selectedJob.status==="complete"&&e("div",{style:{background:C.greenBg,border:`1px solid ${C.greenBorder}`,borderRadius:12,padding:"12px 16px",marginBottom:14,fontSize:13,color:C.green,animation:"fadeUp 0.3s ease"}},"✅ Translation sent to client successfully."),
+          selectedJob.status==="complete"
+            ? e("div",{style:{...st.card}},
+                e("div",{style:{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:14}},
+                  e("div",{style:{fontFamily:"'Playfair Display',serif",fontSize:22,color:C.white}},"Completed assignment"),
+                  e("span",{style:{fontSize:11,fontWeight:600,padding:"4px 10px",borderRadius:999,background:C.greenBg,border:`1px solid ${C.greenBorder}`,color:C.green}},"DELIVERED")
+                ),
+                e("div",{style:{display:"grid",gridTemplateColumns:"1fr 1fr",gap:12,marginBottom:18}},
+                  e("div",null,e("div",{style:{fontSize:11,color:C.muted,letterSpacing:"1px",textTransform:"uppercase"}},"Language"),e("div",{style:{fontSize:14,color:C.text,marginTop:4}}, "EN → ",selectedJob.language)),
+                  e("div",null,e("div",{style:{fontSize:11,color:C.muted,letterSpacing:"1px",textTransform:"uppercase"}},"Words"),e("div",{style:{fontSize:14,color:C.text,marginTop:4}}, selectedJob.sourceWordCount||0)),
+                  e("div",null,e("div",{style:{fontSize:11,color:C.muted,letterSpacing:"1px",textTransform:"uppercase"}},"Claimed"),e("div",{style:{fontSize:14,color:C.text,marginTop:4}}, formatDateTime(selectedJob.claimedAt))),
+                  e("div",null,e("div",{style:{fontSize:11,color:C.muted,letterSpacing:"1px",textTransform:"uppercase"}},"Completed"),e("div",{style:{fontSize:14,color:C.text,marginTop:4}}, formatDateTime(selectedJob.completedAt)))
+                ),
+                e("div",{style:{display:"grid",gridTemplateColumns:"1fr 1fr",gap:14}},
+                  e("div",null,
+                    e("div",{style:{fontSize:11,color:C.muted,letterSpacing:"1px",textTransform:"uppercase",marginBottom:8}},"Original"),
+                    e("div",{style:{fontSize:13,color:C.muted,lineHeight:1.75,whiteSpace:"pre-wrap",maxHeight:300,overflow:"auto",padding:12,border:`1px solid ${C.border}`,borderRadius:10,background:"rgba(255,255,255,0.03)"}},selectedJob.originalText)
+                  ),
+                  e("div",null,
+                    e("div",{style:{fontSize:11,color:C.light,letterSpacing:"1px",textTransform:"uppercase",marginBottom:8}},"Final translation"),
+                    e("div",{style:{fontSize:13,color:C.text,lineHeight:1.75,whiteSpace:"pre-wrap",maxHeight:300,overflow:"auto",padding:12,border:`1px solid ${C.border}`,borderRadius:10,background:"rgba(255,255,255,0.03)"}}, selectedJob.revisedTranslation||"")
+                  )
+                )
+              )
+            : e(ReviewEditor,{selectedJob,updateJob,onDone:()=>{setJustSent(true); setTimeout(()=>setJustSent(false),3500);}})
+        )
+      : (!showList && e("div",{style:st.muted},"Select an assignment to open it."))
+  );
+}
+
+function FinanceTab({me,allJobs}){
+  const e=React.createElement;
+  const RATE = 2.5;
+
+  const completed = useMemo(()=>allJobs
+    .filter(j=>j.completedByRevisorId===me.revisorId && j.status==="complete")
+    .sort((a,b)=>(b.completedAt||0)-(a.completedAt||0))
+  ,[allJobs,me.revisorId]);
+
+  const items = useMemo(()=>completed.map(j=>{
+    const words = typeof j.sourceWordCount==="number" ? j.sourceWordCount : 0;
+    const earningsCents = Math.round(words * RATE);
+    return {id:j.id,language:j.language,completedAt:j.completedAt||j.createdAt,sourceWordCount:words,earningsCents};
+  }),[completed]);
+
+  const totalCents = items.reduce((a,b)=>a+b.earningsCents,0);
+  const totalWords = items.reduce((a,b)=>a+b.sourceWordCount,0);
+
+  const nowKey = localMonthKey(Date.now());
+  const monthGroups = useMemo(()=>{
+    const map = new Map();
+    for(const it of items){
+      const key = localMonthKey(it.completedAt);
+      const label = localMonthLabel(it.completedAt);
+      const cur = map.get(key) || {key,label,items:[],cents:0,words:0};
+      cur.items.push(it);
+      cur.cents += it.earningsCents;
+      cur.words += it.sourceWordCount;
+      map.set(key, cur);
+    }
+    const arr = Array.from(map.values());
+    arr.sort((a,b)=> b.key.localeCompare(a.key));
+    return arr;
+  },[items]);
+
+  const thisMonth = monthGroups.find(g=>g.key===nowKey) || {cents:0,words:0,items:[]};
+
+  function statCard(label,value,sub){
+    return e("div",{style:{...st.card,padding:20}},
+      e("div",{style:{fontSize:11,color:C.muted,letterSpacing:"1.2px",textTransform:"uppercase",marginBottom:8}},label),
+      e("div",{style:{fontSize:28,fontFamily:"'Playfair Display',serif",color:C.white}},value),
+      sub&&e("div",{style:{fontSize:12,color:C.muted,marginTop:4}},sub)
+    );
+  }
+
+  return e("div",null,
+    e("span",{style:st.label},"Finance overview"),
+    e("div",{style:{fontSize:12,color:C.muted,marginBottom:14}},"Earnings are calculated at ", e("strong",{style:{color:C.pale}}, "€0.025"), " per source word of completed translations."),
+    e("div",{style:{display:"grid",gridTemplateColumns:"repeat(auto-fit, minmax(200px, 1fr))",gap:14,marginBottom:20}},
+      statCard("This month", fmtEur(thisMonth.cents), thisMonth.words+" words · "+(thisMonth.items?.length||0)+" jobs"),
+      statCard("All time", fmtEur(totalCents), totalWords+" words · "+items.length+" jobs"),
+      statCard("Rate", "€0.025 / word", "Per source word")
+    ),
+
+    monthGroups.length===0
+      ? e("div",{style:{...st.card,textAlign:"center",padding:40,color:C.muted,fontSize:13}},"No completed assignments yet — finish a job to see earnings here.")
+      : e("div",{style:{display:"flex",flexDirection:"column",gap:14}},
+          monthGroups.map(g=>e("div",{key:g.key,style:{...st.card,padding:0,overflow:"hidden"}},
+            e("div",{style:{display:"flex",alignItems:"center",justifyContent:"space-between",padding:"16px 20px",borderBottom:`1px solid ${C.border}`,background:"rgba(255,255,255,0.02)"}},
+              e("div",null,
+                e("div",{style:{fontFamily:"'Playfair Display',serif",fontSize:18,color:C.white}},g.label),
+                e("div",{style:{fontSize:11,color:C.muted,marginTop:2}},g.items.length," job",g.items.length===1?"":"s"," · ",g.words," words")
+              ),
+              e("div",{style:{fontFamily:"'Playfair Display',serif",fontSize:22,color:C.pale}}, fmtEur(g.cents))
+            ),
+            e("div",{style:{padding:"4px 0"}},
+              g.items.map((it,i)=>e("div",{key:it.id,style:{display:"grid",gridTemplateColumns:"1fr 120px 100px 110px",gap:8,padding:"10px 20px",borderTop:i===0?"none":`1px solid ${C.border}`,fontSize:13,alignItems:"center"}},
+                e("div",{style:{color:C.text}},"EN → ",it.language),
+                e("div",{style:{color:C.muted,fontSize:12}}, it.sourceWordCount," words"),
+                e("div",{style:{color:C.muted,fontSize:12}}, new Date(it.completedAt).toLocaleDateString()),
+                e("div",{style:{color:C.pale,textAlign:"right",fontWeight:600}}, fmtEur(it.earningsCents))
+              ))
+            )
+          ))
+        )
+  );
+}
+
+function RevisorView({me,allJobs,tab,setTab,updateJob,claimJob,onLogout}){
+  const e=React.createElement;
+
+  const counts = {
+    queue: allJobs.filter(j=>j.status==="awaiting_review" && !j.claimedByRevisorId).length,
+    mine: allJobs.filter(j=>(j.claimedByRevisorId===me.revisorId || j.completedByRevisorId===me.revisorId) && j.status!=="complete").length
+  };
+
+  return e("div",{style:{maxWidth:1280,margin:"0 auto",padding:"0 20px"}},
+    e(Header,{me,tab,setTab,onLogout,counts}),
+    tab==="queue" && e(QueueTab,{me,allJobs,claimJob,setTab}),
+    tab==="mine" && e(MyAssignmentsTab,{me,allJobs,updateJob}),
+    tab==="finance" && e(FinanceTab,{me,allJobs})
+  );
+}
+
+ReactDOM.createRoot(document.getElementById("root")).render(React.createElement(RevisorApp));
+</script>
+</body>
+</html>

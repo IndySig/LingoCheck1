@@ -1,0 +1,151 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>LingoCheck — Revisor Login</title>
+<link href="https://fonts.googleapis.com/css2?family=Playfair+Display:ital,wght@0,400;0,600;1,400&family=DM+Sans:wght@300;400;500&display=swap" rel="stylesheet">
+<style>
+  :root{
+    --bg0:#1a1030;
+    --bg1:#120a24;
+    --glow1:rgba(124,92,219,0.22);
+    --glow2:rgba(169,141,240,0.16);
+  }
+  *{margin:0;padding:0;box-sizing:border-box;}
+  body{
+    background:
+      radial-gradient(1100px 700px at 18% 8%, var(--glow1), transparent 60%),
+      radial-gradient(900px 600px at 82% 22%, var(--glow2), transparent 62%),
+      radial-gradient(800px 520px at 55% 92%, rgba(232,208,128,0.10), transparent 60%),
+      linear-gradient(180deg, var(--bg1), var(--bg0));
+    color:#ede8ff;
+    font-family:'DM Sans',system-ui,sans-serif;
+    font-weight:300;
+    min-height:100vh;
+  }
+  @keyframes fadeUp{from{opacity:0;transform:translateY(14px)}to{opacity:1;transform:translateY(0)}}
+  input:focus{border-color:rgba(124,92,219,0.55)!important;outline:none;}
+  a,button{transition:transform .12s ease, box-shadow .18s ease, background .18s ease, border-color .18s ease, opacity .18s ease;}
+  button:not(:disabled):active{transform:translateY(1px) scale(0.99);}
+  a:hover,button:hover{opacity:0.96}
+  button:disabled{opacity:0.5;cursor:not-allowed;}
+  ::-webkit-scrollbar{width:5px;}
+  ::-webkit-scrollbar-thumb{background:rgba(160,130,240,0.3);border-radius:3px;}
+</style>
+</head>
+<body>
+<div id="app"></div>
+<script>
+const C={deep:"#1a1030",mid:"#4a2fa0",accent:"#7c5cdb",light:"#a98df0",pale:"#c9b8f8",surface:"#221545",card:"#2a1a58",border:"rgba(160,130,240,0.18)",text:"#ede8ff",muted:"#a094c8",white:"#ffffff",green:"#7dd4a8",greenBg:"rgba(100,200,150,0.07)",greenBorder:"rgba(100,200,150,0.2)"};
+const st={
+  card:{background:"linear-gradient(180deg, rgba(255,255,255,0.05), rgba(255,255,255,0.03))",backdropFilter:"blur(10px)",border:`1px solid ${C.border}`,borderRadius:20,padding:28,boxShadow:"0 20px 60px rgba(0,0,0,0.20)"},
+  btn:{fontFamily:"inherit",cursor:"pointer",border:"none",borderRadius:12,fontWeight:600,transition:"opacity 0.2s"},
+  label:{fontSize:11,fontWeight:600,letterSpacing:"1.2px",textTransform:"uppercase",color:C.light,marginBottom:10,display:"block"},
+  inp:{width:"100%",background:"rgba(255,255,255,0.04)",border:`1px solid ${C.border}`,borderRadius:12,padding:"12px 14px",fontFamily:"inherit",fontSize:14,color:C.text,lineHeight:1.4,boxSizing:"border-box",boxShadow:"inset 0 1px 0 rgba(255,255,255,0.06)"},
+  muted:{fontSize:13,color:C.muted}
+};
+
+function styleStr(obj){return Object.entries(obj).map(([k,v])=>`${k.replace(/[A-Z]/g,m=>"-"+m.toLowerCase())}:${v}`).join(';');}
+
+async function apiFetch(path,opts={}) {
+  const r=await fetch(path,{headers:{"Content-Type":"application/json"},...opts});
+  const data=await r.json().catch(()=> ({}));
+  if(!r.ok) throw new Error(data.error||"Request failed");
+  return data;
+}
+
+function qs(sel){return document.querySelector(sel);}
+
+let mode = "login"; // "login" | "signup"
+
+function render(){
+  const isLogin = mode === "login";
+  const root = qs("#app");
+  root.innerHTML = `
+    <div style="max-width:520px;margin:0 auto;padding:0 20px;">
+      <div style="display:flex;align-items:center;justify-content:space-between;padding:24px 0 32px;border-bottom:1px solid ${C.border};margin-bottom:32px">
+        <div style="font-family:'Playfair Display',serif;font-size:24px;font-weight:600;color:${C.white}">Lingo<span style="color:${C.light}">Check</span></div>
+        <a href="/" style="text-decoration:none;font-size:12px;color:${C.muted};border:1px solid ${C.border};padding:6px 14px;border-radius:12px;background:rgba(255,255,255,0.04);box-shadow:0 10px 30px rgba(0,0,0,0.18)">← Client Portal</a>
+      </div>
+
+      <div style="animation:fadeUp .35s ease;${styleStr(st.card)}">
+        <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px">
+          <div style="font-family:'Playfair Display',serif;font-size:30px;font-weight:400;color:${C.white}">${isLogin?"Revisor login":"Create revisor account"}</div>
+        </div>
+        <div style="${styleStr(st.muted)};line-height:1.7;margin-bottom:18px">
+          ${isLogin?"Log in to access your queue, assignments and finance.":"Sign up to start claiming and reviewing translations."}
+        </div>
+
+        <div style="display:flex;gap:8px;margin-bottom:18px">
+          <button id="tabLogin" style="${styleStr(st.btn)};flex:1;padding:10px;font-size:13px;background:${isLogin?"rgba(124,92,219,0.22)":"rgba(255,255,255,0.04)"};border:1px solid ${isLogin?"rgba(124,92,219,0.45)":C.border};color:${isLogin?C.pale:C.muted}">Log in</button>
+          <button id="tabSignup" style="${styleStr(st.btn)};flex:1;padding:10px;font-size:13px;background:${!isLogin?"rgba(124,92,219,0.22)":"rgba(255,255,255,0.04)"};border:1px solid ${!isLogin?"rgba(124,92,219,0.45)":C.border};color:${!isLogin?C.pale:C.muted}">Sign up</button>
+        </div>
+
+        ${!isLogin ? `
+          <label style="${styleStr(st.label)}">Display name</label>
+          <input id="dn" autocomplete="name" style="${styleStr(st.inp)}" placeholder="e.g. Anna Janssen" />
+          <div style="height:12px"></div>
+        `:""}
+
+        <label style="${styleStr(st.label)}">Username</label>
+        <input id="u" autocomplete="username" style="${styleStr(st.inp)}" placeholder="${isLogin?"your username":"choose a username (3+ chars)"}" />
+        <div style="height:12px"></div>
+
+        <label style="${styleStr(st.label)}">Password</label>
+        <input id="p" type="password" autocomplete="${isLogin?"current-password":"new-password"}" style="${styleStr(st.inp)}" placeholder="${isLogin?"••••••••":"choose a password (6+ chars)"}" />
+
+        <div id="err" style="display:none;margin-top:14px;font-size:12px;color:#f09090"></div>
+        <button id="btn" style="margin-top:18px;${styleStr(st.btn)};width:100%;padding:16px;background:linear-gradient(135deg,${C.mid},${C.accent});font-size:15px;color:${C.white}">
+          ${isLogin?"Log in":"Create account"}
+        </button>
+
+        <div style="margin-top:16px;font-size:11px;color:rgba(160,148,200,0.35);line-height:1.6">
+          Earnings: revisors are paid <strong style="color:${C.pale}">€0.025</strong> per source word of completed translations.
+        </div>
+      </div>
+    </div>
+  `;
+
+  const u=qs("#u"), p=qs("#p"), err=qs("#err"), btn=qs("#btn");
+  const dn=qs("#dn");
+
+  qs("#tabLogin").addEventListener("click", ()=>{ mode="login"; render(); });
+  qs("#tabSignup").addEventListener("click", ()=>{ mode="signup"; render(); });
+
+  async function submit(){
+    err.style.display="none";
+    btn.disabled=true;
+    btn.textContent= isLogin ? "Logging in…" : "Creating…";
+    try{
+      if(isLogin){
+        await apiFetch("/api/auth/login",{method:"POST",body:JSON.stringify({username:u.value.trim(),password:p.value})});
+      }else{
+        await apiFetch("/api/auth/signup",{method:"POST",body:JSON.stringify({username:u.value.trim(),displayName:(dn?.value||"").trim(),password:p.value})});
+      }
+      location.href="/revisor";
+    }catch(e){
+      err.textContent=e.message;
+      err.style.display="block";
+      btn.disabled=false;
+      btn.textContent= isLogin ? "Log in" : "Create account";
+    }
+  }
+  btn.addEventListener("click",submit);
+  p.addEventListener("keydown",ev=>{ if(ev.key==="Enter") submit(); });
+  if(dn) dn.addEventListener("keydown",ev=>{ if(ev.key==="Enter") u.focus(); });
+  u.addEventListener("keydown",ev=>{ if(ev.key==="Enter") p.focus(); });
+}
+
+async function boot(){
+  try{
+    const me=await apiFetch("/api/auth/me",{method:"GET"});
+    if(me.authenticated){ location.href="/revisor"; return; }
+  }catch{}
+  render();
+}
+
+boot();
+</script>
+</body>
+</html>

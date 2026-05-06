@@ -1,0 +1,632 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>LingoCheck — AI + Human Translation</title>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/react/18.2.0/umd/react.production.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.2.0/umd/react-dom.production.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
+<script>window.pdfjsLib && (pdfjsLib.GlobalWorkerOptions.workerSrc="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js");</script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/pdf-lib/1.17.1/pdf-lib.min.js"></script>
+<link href="https://fonts.googleapis.com/css2?family=Playfair+Display:ital,wght@0,400;0,600;1,400&family=DM+Sans:wght@300;400;500&display=swap" rel="stylesheet">
+<style>
+  :root{
+    --bg0:#1a1030;
+    --bg1:#120a24;
+    --glow1:rgba(124,92,219,0.22);
+    --glow2:rgba(169,141,240,0.16);
+    --ink:rgba(10,5,20,0.75);
+  }
+  *{margin:0;padding:0;box-sizing:border-box;}
+  body{
+    background:
+      radial-gradient(1100px 700px at 18% 8%, var(--glow1), transparent 60%),
+      radial-gradient(900px 600px at 82% 22%, var(--glow2), transparent 62%),
+      radial-gradient(800px 520px at 55% 92%, rgba(232,208,128,0.10), transparent 60%),
+      linear-gradient(180deg, var(--bg1), var(--bg0));
+    color:#ede8ff;
+    font-family:'DM Sans',system-ui,sans-serif;
+    font-weight:300;
+    min-height:100vh;
+  }
+  /* Decorative halftone + vignette (client portal only) */
+  body::before{
+    content:"";
+    position:fixed;
+    inset:-120px;
+    pointer-events:none;
+    z-index:0;
+    opacity:0.32;
+    background:
+      radial-gradient(closest-side at 18% 18%, rgba(124,92,219,0.18), transparent 64%),
+      radial-gradient(closest-side at 78% 32%, rgba(169,141,240,0.11), transparent 66%),
+      radial-gradient(circle at 22% 26%, rgba(201,184,248,0.22) 0 2px, transparent 3px),
+      radial-gradient(circle at 22% 26%, rgba(124,92,219,0.16) 0 1px, transparent 2px),
+      radial-gradient(circle at 22% 26%, rgba(255,255,255,0.03) 0 1px, transparent 2px);
+    background-size:
+      auto,
+      auto,
+      18px 18px,
+      26px 26px,
+      42px 42px;
+    background-position:
+      center,
+      center,
+      0 0,
+      12px 8px,
+      18px 14px;
+    transform:rotate(-8deg);
+    filter:blur(0.6px) saturate(1.02);
+    mix-blend-mode:screen;
+  }
+  body::after{
+    content:"";
+    position:fixed;
+    inset:-1px;
+    pointer-events:none;
+    z-index:0;
+    background:
+      radial-gradient(900px 540px at 70% 12%, rgba(0,0,0,0.0), rgba(0,0,0,0.18) 70%, rgba(0,0,0,0.34) 100%),
+      radial-gradient(900px 640px at 18% 82%, rgba(0,0,0,0.0), rgba(0,0,0,0.17) 72%, rgba(0,0,0,0.32) 100%),
+      linear-gradient(180deg, rgba(0,0,0,0.10), rgba(0,0,0,0.0) 18%, rgba(0,0,0,0.13) 100%);
+  }
+  #root{position:relative;z-index:1;}
+  @keyframes spin{to{transform:rotate(360deg)}}
+  @keyframes fadeUp{from{opacity:0;transform:translateY(14px)}to{opacity:1;transform:translateY(0)}}
+  @keyframes pulse{0%,100%{opacity:1}50%{opacity:0.3}}
+  @keyframes glow{0%,100%{box-shadow:0 0 0 0 rgba(124,92,219,0)}50%{box-shadow:0 0 20px 5px rgba(124,92,219,0.18)}}
+  a,button{transition:transform .12s ease, box-shadow .18s ease, background .18s ease, border-color .18s ease, opacity .18s ease;}
+  button:not(:disabled):active{transform:translateY(1px) scale(0.99);}
+  a:hover,button:hover{opacity:0.96}
+  textarea:focus{border-color:rgba(124,92,219,0.55)!important;outline:none;}
+  select option{background:#2a1a58;}
+  button:disabled{opacity:0.5;cursor:not-allowed;}
+  ::-webkit-scrollbar{width:5px;}
+  ::-webkit-scrollbar-thumb{background:rgba(160,130,240,0.3);border-radius:3px;}
+</style>
+</head>
+<body>
+<div id="root"></div>
+<script>
+const {useState,useEffect,useCallback,useRef}=React;
+
+const C={deep:"#1a1030",mid:"#4a2fa0",accent:"#7c5cdb",light:"#a98df0",pale:"#c9b8f8",surface:"#221545",card:"#2a1a58",border:"rgba(160,130,240,0.18)",text:"#ede8ff",muted:"#a094c8",white:"#ffffff",green:"#7dd4a8",greenBg:"rgba(100,200,150,0.07)",greenBorder:"rgba(100,200,150,0.2)",amber:"#e8d080",amberBg:"rgba(255,200,80,0.06)",amberBorder:"rgba(255,200,80,0.15)"};
+const st={
+  card:{background:"linear-gradient(180deg, rgba(255,255,255,0.05), rgba(255,255,255,0.03))",backdropFilter:"blur(10px)",border:`1px solid ${C.border}`,borderRadius:20,padding:28,boxShadow:"0 20px 60px rgba(0,0,0,0.20)"},
+  btn:{fontFamily:"inherit",cursor:"pointer",border:"none",borderRadius:12,fontWeight:600,transition:"opacity 0.2s"},
+  label:{fontSize:11,fontWeight:600,letterSpacing:"1.2px",textTransform:"uppercase",color:C.light,marginBottom:10,display:"block"},
+  ta:{width:"100%",background:"rgba(255,255,255,0.04)",border:`1px solid ${C.border}`,borderRadius:12,padding:14,fontFamily:"inherit",fontSize:14,color:C.text,lineHeight:1.7,resize:"vertical",boxSizing:"border-box",boxShadow:"inset 0 1px 0 rgba(255,255,255,0.06)"},
+  muted:{fontSize:13,color:C.muted}
+};
+
+function genId(){return Date.now().toString(36)+Math.random().toString(36).slice(2,6);}
+function getClientId(){let id=localStorage.getItem("lc_cid");if(!id){id=genId();localStorage.setItem("lc_cid",id);}return id;}
+
+async function apiFetch(path,opts={}){const r=await fetch(path,{headers:{"Content-Type":"application/json"},...opts});if(!r.ok){const e=await r.json();throw new Error(e.error||"Request failed");}return r.json();}
+
+function Spinner({size=18}){return React.createElement("span",{style:{display:"inline-block",width:size,height:size,border:"2px solid rgba(255,255,255,0.15)",borderTopColor:C.pale,borderRadius:"50%",animation:"spin 0.7s linear infinite",verticalAlign:"middle"}});}
+
+async function fileToArrayBuffer(file){
+  return new Promise((resolve,reject)=>{const r=new FileReader();r.onload=()=>resolve(r.result);r.onerror=reject;r.readAsArrayBuffer(file);});
+}
+
+function arrayBufferToBase64(buf){
+  const bytes = new Uint8Array(buf);
+  let binary = "";
+  const chunk = 0x8000;
+  for(let i=0;i<bytes.length;i+=chunk){
+    binary += String.fromCharCode.apply(null, bytes.subarray(i,i+chunk));
+  }
+  return btoa(binary);
+}
+
+function base64ToUint8Array(b64){
+  const bin = atob(b64);
+  const bytes = new Uint8Array(bin.length);
+  for(let i=0;i<bin.length;i++) bytes[i]=bin.charCodeAt(i);
+  return bytes;
+}
+
+function hasPdfImages(uint8){
+  try{
+    const head = new TextDecoder("latin1").decode(uint8.slice(0, Math.min(uint8.length, 350000)));
+    return head.includes("/Subtype /Image") || head.includes("/Image");
+  }catch{ return false; }
+}
+
+async function extractPdfText(file){
+  if(!window.pdfjsLib) throw new Error("PDF support not loaded");
+  const buf = await fileToArrayBuffer(file);
+  const uint8 = new Uint8Array(buf);
+  const images = hasPdfImages(uint8);
+  const doc = await pdfjsLib.getDocument({ data: uint8 }).promise;
+  let out = "";
+  for(let i=1;i<=doc.numPages;i++){
+    const page = await doc.getPage(i);
+    const content = await page.getTextContent();
+    const text = content.items.map(it=>it.str).join(" ").replace(/\s+/g," ").trim();
+    if(text) out += (out? "\n\n":"") + text;
+  }
+  const cleaned = out.trim();
+  const tooLittle = cleaned.replace(/\s+/g,"").length < 30;
+  return { text: cleaned, hasImages: images, isScannedLike: tooLittle };
+}
+
+async function extractDocxText(file){
+  if(!window.JSZip) throw new Error("DOCX support not loaded");
+  const buf = await fileToArrayBuffer(file);
+  const zip = await JSZip.loadAsync(buf);
+  const files = Object.keys(zip.files);
+  const hasMedia = files.some(n => n.startsWith("word/media/"));
+  const docFile = zip.file("word/document.xml");
+  if(!docFile) return { text:"", hasImages: hasMedia, hasDrawing: false };
+  const xmlStr = await docFile.async("string");
+  const xml = new DOMParser().parseFromString(xmlStr, "application/xml");
+  const nodes = Array.from(xml.getElementsByTagName("*"));
+  const hasDrawing = nodes.some(n => (n.localName==="drawing" || n.localName==="pict"));
+  const texts = nodes.filter(n => n.localName==="t").map(n => n.textContent || "");
+  const text = texts.join(" ").replace(/\s+/g," ").trim();
+  return { text, hasImages: hasMedia, hasDrawing };
+}
+
+function downloadBlob(blob, filename){
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = filename;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  setTimeout(()=>URL.revokeObjectURL(url), 1000);
+}
+
+function escapeXml(s){
+  return String(s||"")
+    .replaceAll("&","&amp;")
+    .replaceAll("<","&lt;")
+    .replaceAll(">","&gt;")
+    .replaceAll("\"","&quot;")
+    .replaceAll("'","&apos;");
+}
+
+async function makeDocxBlobFromText(text){
+  if(!window.JSZip) throw new Error("DOCX support not loaded");
+  const zip = new JSZip();
+  zip.file("[Content_Types].xml", `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">
+  <Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>
+  <Default Extension="xml" ContentType="application/xml"/>
+  <Override PartName="/word/document.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/>
+  <Override PartName="/docProps/core.xml" ContentType="application/vnd.openxmlformats-package.core-properties+xml"/>
+  <Override PartName="/docProps/app.xml" ContentType="application/vnd.openxmlformats-officedocument.extended-properties+xml"/>
+</Types>`);
+
+  zip.folder("_rels").file(".rels", `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
+  <Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="word/document.xml"/>
+  <Relationship Id="rId2" Type="http://schemas.openxmlformats.org/package/2006/relationships/metadata/core-properties" Target="docProps/core.xml"/>
+  <Relationship Id="rId3" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/extended-properties" Target="docProps/app.xml"/>
+</Relationships>`);
+
+  const lines = String(text||"").split(/\n{2,}/g).map(s=>s.trim()).filter(Boolean);
+  const paras = (lines.length?lines:[String(text||"").trim()]).map(p=>{
+    const run = escapeXml(p).split(/\n/g).map(x=>x.trim()).filter(Boolean).join(" ");
+    return `<w:p><w:r><w:t xml:space="preserve">${run}</w:t></w:r></w:p>`;
+  }).join("");
+
+  zip.folder("word").file("document.xml", `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">
+  <w:body>
+    ${paras}
+    <w:sectPr/>
+  </w:body>
+</w:document>`);
+
+  zip.folder("word").folder("_rels").file("document.xml.rels", `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"></Relationships>`);
+
+  const now = new Date().toISOString();
+  zip.folder("docProps").file("core.xml", `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<cp:coreProperties xmlns:cp="http://schemas.openxmlformats.org/package/2006/metadata/core-properties"
+ xmlns:dc="http://purl.org/dc/elements/1.1/"
+ xmlns:dcterms="http://purl.org/dc/terms/"
+ xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance">
+  <dc:title>Translation</dc:title>
+  <dc:creator>LingoCheck</dc:creator>
+  <cp:lastModifiedBy>LingoCheck</cp:lastModifiedBy>
+  <dcterms:created xsi:type="dcterms:W3CDTF">${now}</dcterms:created>
+  <dcterms:modified xsi:type="dcterms:W3CDTF">${now}</dcterms:modified>
+</cp:coreProperties>`);
+
+  zip.folder("docProps").file("app.xml", `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<Properties xmlns="http://schemas.openxmlformats.org/officeDocument/2006/extended-properties"
+ xmlns:vt="http://schemas.openxmlformats.org/officeDocument/2006/docPropsVTypes">
+  <Application>LingoCheck</Application>
+</Properties>`);
+
+  const buf = await zip.generateAsync({ type: "uint8array" });
+  return new Blob([buf], { type: "application/vnd.openxmlformats-officedocument.wordprocessingml.document" });
+}
+
+async function makeStyledDocxBlobFromTemplate(templateDocxB64, translatedText){
+  if(!window.JSZip) throw new Error("DOCX support not loaded");
+  const bytes = base64ToUint8Array(templateDocxB64);
+  const zip = await JSZip.loadAsync(bytes);
+  const docFile = zip.file("word/document.xml");
+  if(!docFile) throw new Error("DOCX template missing document.xml");
+  const xmlStr = await docFile.async("string");
+  const xml = new DOMParser().parseFromString(xmlStr, "application/xml");
+
+  const translatedParas = String(translatedText||"").split(/\n{2,}/g).map(s=>s.trim());
+  const paragraphs = Array.from(xml.getElementsByTagNameNS("*","p"));
+
+  // Map translated paragraphs into existing paragraphs (preserve style/run structure).
+  const usable = translatedParas.filter(p=>p.length>0);
+  if(usable.length===0) usable.push("");
+
+  for(let pi=0; pi<paragraphs.length; pi++){
+    const p = paragraphs[pi];
+    const tNodes = Array.from(p.getElementsByTagNameNS("*","t"));
+    if(tNodes.length===0) continue;
+    const nextText = (pi < usable.length-1) ? usable[pi] : usable.slice(pi).join("\n\n"); // merge overflow into last available paragraph
+    tNodes[0].textContent = nextText;
+    for(let i=1;i<tNodes.length;i++) tNodes[i].textContent = "";
+  }
+
+  const serializer = new XMLSerializer();
+  const newXml = serializer.serializeToString(xml);
+  zip.file("word/document.xml", newXml);
+  const out = await zip.generateAsync({ type:"uint8array" });
+  return new Blob([out], { type: "application/vnd.openxmlformats-officedocument.wordprocessingml.document" });
+}
+
+async function makePdfBlobFromText(text){
+  if(!window.PDFLib) throw new Error("PDF export not loaded");
+  const { PDFDocument, StandardFonts } = PDFLib;
+  const pdfDoc = await PDFDocument.create();
+  const font = await pdfDoc.embedFont(StandardFonts.Helvetica);
+  const fontSize = 11;
+  const margin = 50;
+  const lineHeight = 14;
+
+  function wrapLine(str, maxWidth){
+    const words = str.split(/\s+/).filter(Boolean);
+    const lines = [];
+    let cur = "";
+    for(const w of words){
+      const test = cur ? (cur + " " + w) : w;
+      const width = font.widthOfTextAtSize(test, fontSize);
+      if(width <= maxWidth){
+        cur = test;
+      }else{
+        if(cur) lines.push(cur);
+        cur = w;
+      }
+    }
+    if(cur) lines.push(cur);
+    return lines;
+  }
+
+  const paragraphs = String(text||"").split(/\n{2,}/g);
+  let page = pdfDoc.addPage();
+  let { width, height } = page.getSize();
+  let y = height - margin;
+  const maxWidth = width - margin*2;
+
+  for(const para of paragraphs){
+    const raw = para.replace(/\s+/g," ").trim();
+    const lines = raw ? wrapLine(raw, maxWidth) : [""];
+    for(const line of lines){
+      if(y < margin){
+        page = pdfDoc.addPage();
+        ({ width, height } = page.getSize());
+        y = height - margin;
+      }
+      page.drawText(line, { x: margin, y, size: fontSize, font, color: PDFLib.rgb(0,0,0) });
+      y -= lineHeight;
+    }
+    y -= lineHeight; // paragraph gap
+  }
+
+  const bytes = await pdfDoc.save();
+  return new Blob([bytes], { type: "application/pdf" });
+}
+
+// ══════════════════════════════════════════════════════
+// ROOT (Client portal only)
+// ══════════════════════════════════════════════════════
+function App(){
+  const[jobs,setJobs]=useState([]);
+  const clientId=useRef(getClientId());
+
+  const refresh=useCallback(async()=>{try{const loaded=await apiFetch("/api/jobs");setJobs(loaded);}catch{};},[]);
+  useEffect(()=>{refresh();const t=setInterval(refresh,2500);return()=>clearInterval(t);},[refresh]);
+
+  const createJob=async(job)=>{const j=await apiFetch("/api/jobs",{method:"POST",body:JSON.stringify(job)});setJobs(prev=>[...prev,j]);return j;};
+  const updateJob=async(id,patch)=>{const j=await apiFetch(`/api/jobs/${id}`,{method:"PATCH",body:JSON.stringify(patch)});setJobs(prev=>prev.map(x=>x.id===id?j:x));return j;};
+
+  return React.createElement("div",{style:{background:"transparent",minHeight:"100vh",paddingBottom:60}},
+    React.createElement(ClientView,{allJobs:jobs,clientId:clientId.current,createJob})
+  );
+}
+
+// ══════════════════════════════════════════════════════
+// CLIENT VIEW
+// ══════════════════════════════════════════════════════
+function ClientView({allJobs,clientId,createJob}){
+  const[stage,setStage]=useState("idle");
+  const[inputText,setInputText]=useState("");
+  const[language,setLanguage]=useState("Dutch");
+  const[aiResult,setAiResult]=useState("");
+  const[currentJobId,setCurrentJobId]=useState(null);
+  const[error,setError]=useState("");
+  const[fileScan,setFileScan]=useState(null); // {name, fit, reason}
+  const[fileBusy,setFileBusy]=useState(false);
+  const[sourceFile,setSourceFile]=useState(null); // {name, ext, docxB64?}
+  const[isWide,setIsWide]=useState(()=>window.matchMedia && window.matchMedia("(min-width: 980px)").matches);
+  const fileRef=useRef();
+
+  useEffect(()=>{
+    if(!currentJobId||stage==="complete")return;
+    const job=allJobs.find(j=>j.id===currentJobId);
+    if(job?.status==="complete")setStage("complete");
+  },[allJobs,currentJobId,stage]);
+
+  useEffect(()=>{
+    if(!window.matchMedia) return;
+    const mq = window.matchMedia("(min-width: 980px)");
+    const onChange = () => setIsWide(!!mq.matches);
+    onChange();
+    if(mq.addEventListener) mq.addEventListener("change", onChange);
+    else mq.addListener(onChange);
+    return () => {
+      if(mq.removeEventListener) mq.removeEventListener("change", onChange);
+      else mq.removeListener(onChange);
+    };
+  },[]);
+
+  const currentJob=allJobs.find(j=>j.id===currentJobId);
+  const words=inputText.trim().split(/\s+/).filter(Boolean).length;
+
+  async function handleTranslate(){
+    if(!inputText.trim()){setError("Please enter some text first.");return;}
+    setError("");setStage("translating");
+    try{
+      const data=await apiFetch("/api/translate",{method:"POST",body:JSON.stringify({text:inputText.trim(),language})});
+      setAiResult(data.translation);setStage("translated");
+    }catch(e){setError("Translation failed: "+e.message);setStage("idle");}
+  }
+
+  async function handleSend(){
+    const id=genId();
+    const ext = sourceFile?.ext || "txt";
+    const name = sourceFile?.name || `translation.${ext}`;
+    await createJob({
+      id,
+      clientId,
+      originalText: inputText.trim(),
+      language,
+      aiTranslation: aiResult,
+      status: "awaiting_review",
+      revisedTranslation: null,
+      sourceFile: { name, ext, docxB64: sourceFile?.docxB64 || null }
+    });
+    setCurrentJobId(id);setStage("sent");
+  }
+
+  function handleReset(){setStage("idle");setInputText("");setAiResult("");setCurrentJobId(null);setError("");setSourceFile(null);setFileScan(null);}
+
+  async function handleFile(e){
+    const file=e.target.files[0];if(!file)return;
+    setError("");setFileScan(null);setSourceFile(null);
+    const name=(file.name||"").toLowerCase();
+    const max=4*1024*1024;
+    if(file.size>max){setError("File too large (max 4 MB).");return;}
+    setFileBusy(true);
+    try{
+      if(name.endsWith(".txt")||name.endsWith(".md")){
+        const reader=new FileReader();
+        reader.onload=ev=>{setInputText(ev.target.result||"");setFileScan({name:file.name,fit:true,reason:"Text file"});setSourceFile({name:file.name,ext:name.endsWith(".md")?"md":"txt"});setFileBusy(false);};
+        reader.onerror=()=>{setError("Could not read file.");setFileBusy(false);};
+        reader.readAsText(file);
+        return;
+      }
+      if(name.endsWith(".pdf")){
+        const r=await extractPdfText(file);
+        if(r.hasImages || r.isScannedLike || !r.text){
+          setFileScan({name:file.name,fit:false,reason:r.hasImages?"PDF contains images (likely scanned).":"PDF has no usable text layer (likely scanned)."});
+          setInputText("");
+          return;
+        }
+        setInputText(r.text);
+        setFileScan({name:file.name,fit:true,reason:"PDF text extracted"});
+        setSourceFile({name:file.name,ext:"pdf"});
+        return;
+      }
+      if(name.endsWith(".docx")){
+        const buf = await fileToArrayBuffer(file);
+        const r=await extractDocxText(file);
+        if(r.hasImages || r.hasDrawing || !r.text){
+          setFileScan({name:file.name,fit:false,reason:(r.hasImages||r.hasDrawing)?"Word document contains images/drawings.":"Word document has no extractable text."});
+          setInputText("");
+          return;
+        }
+        setInputText(r.text);
+        setFileScan({name:file.name,fit:true,reason:"Word text extracted"});
+        setSourceFile({name:file.name,ext:"docx",docxB64:arrayBufferToBase64(buf)});
+        return;
+      }
+      setError("Unsupported file type. Upload .txt, .docx, or .pdf.");
+    }catch(err){
+      setError("Could not process file: "+(err.message||"Unknown error"));
+    }finally{
+      setFileBusy(false);
+    }
+  }
+
+  const e=React.createElement;
+
+  const header=e("div",{style:{display:"flex",alignItems:"center",justifyContent:"space-between",padding:"24px 0 32px",borderBottom:`1px solid ${C.border}`,marginBottom:36}},
+    e("div",{style:{fontFamily:"'Playfair Display',serif",fontSize:24,fontWeight:600,color:C.white}},"Lingo",e("span",{style:{color:C.light}},"Check")),
+    e("div",{style:{display:"flex",gap:10}},
+      e("span",{style:{fontSize:11,fontWeight:500,letterSpacing:"1.5px",textTransform:"uppercase",color:C.light,background:"rgba(124,92,219,0.15)",border:"1px solid rgba(124,92,219,0.3)",padding:"6px 14px",borderRadius:20}},"Client Portal"),
+    )
+  );
+
+  return e("div",{style:{maxWidth:1240,margin:"0 auto",padding:"0 22px"}},header,
+
+    stage==="idle"&&e("div",{style:{animation:"fadeUp 0.4s ease"}},
+      e("div",{style:{display:"grid",gridTemplateColumns:isWide?"1.08fr 0.92fr":"1fr",gap:18,alignItems:"start"}},
+        e("div",null,
+          e("h1",{style:{fontFamily:"'Playfair Display',serif",fontSize:isWide?46:40,fontWeight:400,lineHeight:1.12,color:C.white,marginBottom:12,maxWidth:isWide?640:560}},
+            "Translation made ",e("em",{style:{fontStyle:"italic",color:C.pale}},"fast")," and reliable"),
+          e("p",{style:{fontSize:15,color:C.muted,lineHeight:1.7,maxWidth:520,marginBottom:24}},"AI translates instantly. Our human revisor refines every word. Agency quality at a fraction of the cost."),
+          e("div",{style:{display:"flex",flexWrap:"wrap",gap:10,background:"rgba(34,21,69,0.55)",border:`1px solid ${C.border}`,borderRadius:14,padding:"14px 14px",marginBottom:isWide?0:18,alignItems:"center"}},
+            [["📄","Upload"],["🤖","AI draft"],["👁","Human revisor"],["✅","Delivered"]].map(([icon,lbl],i)=>
+              e("div",{key:i,style:{display:"flex",alignItems:"center",gap:8,background:"rgba(255,255,255,0.03)",border:`1px solid ${C.border}`,borderRadius:12,padding:"10px 12px"}},
+                e("div",{style:{fontSize:15}},icon),
+                e("div",null,
+                  e("div",{style:{fontSize:11,fontWeight:600,color:C.pale,letterSpacing:"0.3px"}},lbl),
+                  e("div",{style:{fontSize:11,color:"rgba(160,148,200,0.55)"}},i===0?"Text/PDF/DOCX":i===1?"Seconds":i===2?"Quality check":"Ready to use")
+                )
+              )
+            )
+          )
+        ),
+
+        e("div",{style:{...st.card}},
+          e("span",{style:st.label},"Your text"),
+          e("div",{style:{display:"flex",alignItems:"center",gap:10,marginBottom:16}},
+            e("div",{style:{background:"rgba(124,92,219,0.1)",border:`1px solid ${C.border}`,borderRadius:10,padding:"9px 14px",fontSize:13,color:C.muted}},"🇬🇧 English"),
+            e("span",{style:{color:C.accent,fontSize:18}},"→"),
+            e("select",{value:language,onChange:ev=>setLanguage(ev.target.value),style:{flex:1,background:"rgba(124,92,219,0.12)",border:"1px solid rgba(124,92,219,0.35)",borderRadius:10,padding:"9px 14px",fontFamily:"inherit",fontSize:13,fontWeight:600,color:C.white,outline:"none",cursor:"pointer"}},
+              e("option",null,"Dutch"),e("option",null,"Spanish"),e("option",null,"German")
+            )
+          ),
+          e("div",{style:{position:"relative",marginBottom:14}},
+            e("textarea",{style:{...st.ta,minHeight:isWide?220:160},placeholder:'Paste your text here… e.g. "We are looking for a reliable translation partner."',value:inputText,onChange:ev=>setInputText(ev.target.value),maxLength:4000}),
+            e("span",{style:{position:"absolute",bottom:10,right:12,fontSize:11,color:C.muted}},words," words")
+          ),
+          e("div",{style:{display:"flex",alignItems:"center",gap:10,marginBottom:20,flexWrap:"wrap"}},
+            e("input",{ref:fileRef,type:"file",accept:".txt,.md,.pdf,.docx",style:{display:"none"},onChange:handleFile}),
+            e("button",{disabled:fileBusy,onClick:()=>fileRef.current.click(),style:{...st.btn,background:"transparent",border:"1px dashed rgba(124,92,219,0.4)",color:C.muted,padding:"8px 14px",fontSize:12}},fileBusy?"Scanning…":"📎 Upload file"),
+            e("span",{style:{fontSize:11,color:"rgba(160,148,200,0.4)"}},".txt, .docx, .pdf · max 4 MB")
+          ),
+          fileScan&&e("div",{style:{fontSize:12,marginBottom:12,color:fileScan.fit?C.green:"#f09090",background:fileScan.fit?C.greenBg:"rgba(240,144,144,0.08)",border:`1px solid ${fileScan.fit?C.greenBorder:"rgba(240,144,144,0.25)"}`,borderRadius:10,padding:"10px 12px"}},
+            e("div",{style:{fontWeight:600,marginBottom:4}},fileScan.fit?"✓ File is fit for translation":"✕ File is not fit for translation"),
+            e("div",{style:{opacity:0.9}},fileScan.name," — ",fileScan.reason)
+          ),
+          error&&e("div",{style:{fontSize:12,color:"#f09090",marginBottom:12}},error),
+          e("button",{disabled:!!(fileScan&&fileScan.fit===false)||fileBusy,onClick:handleTranslate,style:{...st.btn,width:"100%",padding:16,background:`linear-gradient(135deg,${C.mid},${C.accent})`,fontSize:15,color:C.white,boxShadow:"0 18px 50px rgba(124,92,219,0.22)"}},
+            (fileScan&&fileScan.fit===false)?"File not translatable":"Translate with LingoCheck"
+          )
+        )
+      )
+    ),
+
+    stage==="translating"&&e("div",{style:{...st.card,textAlign:"center",padding:"60px 32px",animation:"fadeUp 0.3s ease"}},
+      e("div",{style:{marginBottom:20}},e(Spinner,{size:26})),
+      e("div",{style:{fontFamily:"'Playfair Display',serif",fontSize:24,color:C.white,marginBottom:8}},"AI is translating…"),
+      e("div",{style:st.muted},"Processing your text with our language model")
+    ),
+
+    stage==="translated"&&e("div",{style:{animation:"fadeUp 0.4s ease"}},
+      e("div",{style:{...st.card,marginBottom:14}},
+        e("span",{style:st.label},"Original — English"),
+        e("div",{style:{fontSize:13,color:C.muted,lineHeight:1.75,whiteSpace:"pre-wrap"}},inputText)
+      ),
+      e("div",{style:{...st.card,border:"1px solid rgba(124,92,219,0.4)",marginBottom:16}},
+        e("div",{style:{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:12}},
+          e("span",{style:st.label},"AI Translation — ",language),
+          e("span",{style:{fontSize:11,background:"rgba(124,92,219,0.15)",border:"1px solid rgba(124,92,219,0.25)",color:C.light,borderRadius:20,padding:"3px 10px"}},"AI draft")
+        ),
+        e("div",{style:{fontSize:14,lineHeight:1.8,color:C.text,whiteSpace:"pre-wrap",marginBottom:20}},aiResult),
+        e("div",{style:{display:"grid",gridTemplateColumns:"repeat(3,1fr)",gap:10,marginBottom:18}},
+          [[words,"Words"],[`€${(words*0.04).toFixed(2)}`,`Your price`],[`€${(words*0.125).toFixed(2)}`,"Agency price"]].map(([v,l],i)=>
+            e("div",{key:i,style:{background:"rgba(255,255,255,0.03)",border:`1px solid ${C.border}`,borderRadius:10,padding:"12px 14px",textAlign:"center"}},
+              e("div",{style:{fontFamily:"'Playfair Display',serif",fontSize:20,color:C.pale,marginBottom:3}},v),
+              e("div",{style:{fontSize:11,color:C.muted}},l)
+            )
+          )
+        ),
+        e("div",{style:{background:C.amberBg,border:`1px solid ${C.amberBorder}`,borderRadius:10,padding:"12px 16px",marginBottom:16,fontSize:12,color:C.amber}},"✦  This is an AI draft. Once you approve, our revisor will check and refine every word."),
+        e("button",{onClick:handleSend,style:{...st.btn,width:"100%",padding:16,background:"linear-gradient(135deg,#1a6b3a,#2ea05a)",fontSize:15,color:C.white}},
+          "✓ Approve & Send to Revisor  ·  ",e("span",{style:{opacity:0.7,fontSize:12}},"demo: skip payment")
+        )
+      ),
+      e("button",{onClick:handleReset,style:{...st.btn,background:"transparent",border:`1px solid ${C.border}`,color:C.muted,padding:"8px 16px",fontSize:12}},"← Start over")
+    ),
+
+    stage==="sent"&&e("div",{style:{...st.card,textAlign:"center",padding:"60px 32px",border:"1px solid rgba(124,92,219,0.35)",animation:"glow 3s ease-in-out infinite, fadeUp 0.3s ease"}},
+      e("div",{style:{fontSize:42,marginBottom:18}},"👁"),
+      e("div",{style:{fontFamily:"'Playfair Display',serif",fontSize:26,color:C.white,marginBottom:10}},"Awaiting revisor"),
+      e("div",{style:{...st.muted,maxWidth:340,margin:"0 auto 28px",lineHeight:1.7}},"Your translation has been sent to our revisor. They will check and refine it — you'll be notified the moment it's ready."),
+      e("div",{style:{display:"flex",alignItems:"center",justifyContent:"center",gap:8,color:C.muted,fontSize:12}},
+        e("span",{style:{width:7,height:7,borderRadius:"50%",background:C.light,display:"inline-block",animation:"pulse 1.5s ease-in-out infinite"}}),
+        "Checking for updates every 2 seconds…"
+      )
+    ),
+
+    stage==="complete"&&currentJob&&e("div",{style:{animation:"fadeUp 0.5s ease"}},
+      e("div",{style:{background:C.greenBg,border:`1px solid ${C.greenBorder}`,borderRadius:14,padding:"14px 20px",marginBottom:18,display:"flex",alignItems:"center",gap:10}},
+        e("span",{style:{fontSize:20}},"✅"),
+        e("div",null,
+          e("div",{style:{fontSize:13,fontWeight:500,color:C.green}},"Revisor review complete"),
+          e("div",{style:{fontSize:12,color:C.muted}},"Your translation has been human-verified and is ready to use")
+        )
+      ),
+      e("div",{style:{...st.card,border:`1px solid ${C.greenBorder}`,marginBottom:14}},
+        e("div",{style:{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:14}},
+          e("span",{style:st.label},"Final Translation — ",currentJob.language),
+          e("span",{style:{fontSize:11,background:C.greenBg,border:`1px solid ${C.greenBorder}`,color:C.green,borderRadius:20,padding:"3px 10px"}},"✓ Human reviewed")
+        ),
+        e("div",{style:{fontSize:14,lineHeight:1.8,color:C.text,whiteSpace:"pre-wrap",marginBottom:18}},currentJob.revisedTranslation),
+        e("div",{style:{display:"flex",gap:10,flexWrap:"wrap"}},
+          e("button",{onClick:()=>navigator.clipboard.writeText(currentJob.revisedTranslation),style:{...st.btn,background:"transparent",border:`1px solid ${C.border}`,color:C.muted,padding:"8px 16px",fontSize:12}},"Copy translation"),
+          (()=>{
+            const meta = currentJob.sourceFile || { name:"translation.txt", ext:"txt" };
+            const baseName = (meta.name||"translation").replace(/\.[^.]+$/,"");
+            const ext = (meta.ext||"txt").toLowerCase();
+            if(ext==="pdf"){
+              return e(React.Fragment,null,
+                e("button",{onClick:async()=>{
+                  const blob = await makeDocxBlobFromText(currentJob.revisedTranslation||"");
+                  return downloadBlob(blob, `${baseName}-translated.docx`);
+                },style:{...st.btn,background:"rgba(255,255,255,0.04)",border:`1px solid ${C.border}`,color:C.muted,padding:"8px 16px",fontSize:12}},"Download translated DOCX"),
+                e("button",{onClick:async()=>{
+                  const blob = await makePdfBlobFromText(currentJob.revisedTranslation||"");
+                  return downloadBlob(blob, `${baseName}-translated.pdf`);
+                },style:{...st.btn,background:"transparent",border:`1px solid ${C.border}`,color:C.muted,padding:"8px 16px",fontSize:12}},"Download translated PDF (new layout)")
+              );
+            }
+            return e("button",{onClick:async()=>{
+              const finalName = `${baseName}-translated.${ext}`;
+              if(ext==="txt"||ext==="md"){
+                return downloadBlob(new Blob([currentJob.revisedTranslation||""],{type:"text/plain;charset=utf-8"}), finalName);
+              }
+            if(ext==="docx"){
+              if(meta.docxB64){
+                const blob = await makeStyledDocxBlobFromTemplate(meta.docxB64, currentJob.revisedTranslation||"");
+                return downloadBlob(blob, finalName);
+              }
+              const blob = await makeDocxBlobFromText(currentJob.revisedTranslation||"");
+              return downloadBlob(blob, finalName);
+            }
+              return downloadBlob(new Blob([currentJob.revisedTranslation||""],{type:"text/plain;charset=utf-8"}), `${baseName}-translated.txt`);
+            },style:{...st.btn,background:"rgba(255,255,255,0.04)",border:`1px solid ${C.border}`,color:C.muted,padding:"8px 16px",fontSize:12}},"Download translated file");
+          })()
+        )
+      ),
+      e("button",{onClick:handleReset,style:{...st.btn,background:"transparent",border:`1px solid ${C.border}`,color:C.muted,padding:"8px 16px",fontSize:12}},"← Translate another document")
+    ),
+
+    e("div",{style:{textAlign:"center",marginTop:44,fontSize:10,color:"rgba(160,148,200,0.25)",letterSpacing:"0.5px"}},"LINGOCHECK · AI + HUMAN TRANSLATION · INVESTOR DEMO")
+  );
+}
+
+ReactDOM.createRoot(document.getElementById("root")).render(React.createElement(App));
+</script>
+</body>
+</html>

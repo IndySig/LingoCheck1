@@ -1,0 +1,13 @@
+{
+  "name": "lingocheck",
+  "version": "1.0.0",
+  "description": "LingoCheck MVP — AI + Human Translation Demo",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "dependencies": {},
+  "engines": {
+    "node": ">=18.0.0"
+  }
+}
