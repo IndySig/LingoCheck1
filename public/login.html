@@ -4,45 +4,55 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>LingoCheck — Revisor Login</title>
-<link href="https://fonts.googleapis.com/css2?family=Playfair+Display:ital,wght@0,400;0,600;1,400&family=DM+Sans:wght@300;400;500&display=swap" rel="stylesheet">
+<link href="https://fonts.googleapis.com/css2?family=Kufam:ital,wght@0,400;0,500;0,600;0,700;1,400&display=swap" rel="stylesheet">
 <style>
   :root{
-    --bg0:#1a1030;
-    --bg1:#120a24;
-    --glow1:rgba(124,92,219,0.22);
-    --glow2:rgba(169,141,240,0.16);
+    --bg:#ffffff;
+    --ink:#1c1430;
+    --muted:#6b6480;
+    --accent:#6d4fd8;
+    --border:rgba(92,70,168,0.14);
   }
   *{margin:0;padding:0;box-sizing:border-box;}
   body{
     background:
-      radial-gradient(1100px 700px at 18% 8%, var(--glow1), transparent 60%),
-      radial-gradient(900px 600px at 82% 22%, var(--glow2), transparent 62%),
-      radial-gradient(800px 520px at 55% 92%, rgba(232,208,128,0.10), transparent 60%),
-      linear-gradient(180deg, var(--bg1), var(--bg0));
-    color:#ede8ff;
-    font-family:'DM Sans',system-ui,sans-serif;
-    font-weight:300;
+      radial-gradient(720px 280px at 10% -12%, rgba(109,79,216,0.07), transparent 58%),
+      #ffffff;
+    color:var(--ink);
+    font-family:'Kufam',system-ui,sans-serif;
+    font-weight:400;
     min-height:100vh;
+    -webkit-font-smoothing:antialiased;
   }
-  @keyframes fadeUp{from{opacity:0;transform:translateY(14px)}to{opacity:1;transform:translateY(0)}}
-  input:focus{border-color:rgba(124,92,219,0.55)!important;outline:none;}
-  a,button{transition:transform .12s ease, box-shadow .18s ease, background .18s ease, border-color .18s ease, opacity .18s ease;}
-  button:not(:disabled):active{transform:translateY(1px) scale(0.99);}
-  a:hover,button:hover{opacity:0.96}
+  button,input,textarea,select{font-family:inherit;}
+  @keyframes fadeUp{from{opacity:0;transform:translateY(6px)}to{opacity:1;transform:translateY(0)}}
+  input:focus{border-color:var(--accent)!important;outline:none;box-shadow:0 0 0 3px rgba(109,79,216,0.12);}
+  a,button{transition:transform .1s ease, background .12s ease, border-color .12s ease, color .12s ease, opacity .12s ease;}
+  button:not(:disabled):active{transform:translateY(1px);}
+  a:hover,button:hover{opacity:0.92}
   button:disabled{opacity:0.5;cursor:not-allowed;}
-  ::-webkit-scrollbar{width:5px;}
-  ::-webkit-scrollbar-thumb{background:rgba(160,130,240,0.3);border-radius:3px;}
+  ::placeholder{color:#9a93ad;}
+  ::-webkit-scrollbar{width:6px;}
+  ::-webkit-scrollbar-thumb{background:rgba(109,79,216,0.22);border-radius:3px;}
+  .pw-list{list-style:none;margin:10px 0 0;padding:12px 14px;background:#f7f5fb;border:1px solid var(--border);border-radius:10px;}
+  .pw-list li{display:flex;align-items:center;gap:8px;font-size:12px;color:var(--muted);line-height:1.6;}
+  .pw-list li + li{margin-top:2px;}
+  .pw-list li.ok{color:#187a4c;}
+  .pw-dot{width:14px;height:14px;border-radius:50%;border:1.5px solid currentColor;display:inline-flex;align-items:center;justify-content:center;font-size:9px;flex-shrink:0;}
+  .otp{letter-spacing:0.35em;text-align:center;font-size:22px;font-weight:600;}
+  .code-box{text-align:center;background:#f7f5fb;border:1px solid var(--border);border-radius:12px;padding:18px 16px;margin:0 0 18px;}
+  .code-box .digits{font-size:28px;font-weight:600;letter-spacing:0.28em;color:var(--ink);margin-top:6px;}
 </style>
 </head>
 <body>
 <div id="app"></div>
 <script>
-const C={deep:"#1a1030",mid:"#4a2fa0",accent:"#7c5cdb",light:"#a98df0",pale:"#c9b8f8",surface:"#221545",card:"#2a1a58",border:"rgba(160,130,240,0.18)",text:"#ede8ff",muted:"#a094c8",white:"#ffffff",green:"#7dd4a8",greenBg:"rgba(100,200,150,0.07)",greenBorder:"rgba(100,200,150,0.2)"};
+const C={deep:"#1c1430",mid:"#5b3fc4",accent:"#6d4fd8",light:"#6d4fd8",pale:"#6d4fd8",surface:"#ffffff",card:"#ffffff",border:"rgba(92,70,168,0.14)",text:"#1c1430",muted:"#6b6480",white:"#ffffff",green:"#187a4c",greenBg:"#eef8f2",greenBorder:"rgba(24,122,76,0.22)",soft:"#f7f5fb"};
 const st={
-  card:{background:"linear-gradient(180deg, rgba(255,255,255,0.05), rgba(255,255,255,0.03))",backdropFilter:"blur(10px)",border:`1px solid ${C.border}`,borderRadius:20,padding:28,boxShadow:"0 20px 60px rgba(0,0,0,0.20)"},
-  btn:{fontFamily:"inherit",cursor:"pointer",border:"none",borderRadius:12,fontWeight:600,transition:"opacity 0.2s"},
-  label:{fontSize:11,fontWeight:600,letterSpacing:"1.2px",textTransform:"uppercase",color:C.light,marginBottom:10,display:"block"},
-  inp:{width:"100%",background:"rgba(255,255,255,0.04)",border:`1px solid ${C.border}`,borderRadius:12,padding:"12px 14px",fontFamily:"inherit",fontSize:14,color:C.text,lineHeight:1.4,boxSizing:"border-box",boxShadow:"inset 0 1px 0 rgba(255,255,255,0.06)"},
+  card:{background:"#ffffff",border:`1px solid ${C.border}`,borderRadius:14,padding:28},
+  btn:{fontFamily:"inherit",cursor:"pointer",border:"none",borderRadius:10,fontWeight:600,transition:"opacity 0.12s, background 0.12s, border-color 0.12s"},
+  label:{fontSize:11,fontWeight:600,letterSpacing:"1.2px",textTransform:"uppercase",color:C.accent,marginBottom:10,display:"block"},
+  inp:{width:"100%",background:C.soft,border:`1px solid ${C.border}`,borderRadius:10,padding:"12px 14px",fontFamily:"inherit",fontSize:14,color:C.text,lineHeight:1.4,boxSizing:"border-box"},
   muted:{fontSize:13,color:C.muted}
 };
 
@@ -57,29 +67,107 @@ async function apiFetch(path,opts={}) {
 
 function qs(sel){return document.querySelector(sel);}
 
-let mode = "login"; // "login" | "signup"
+const PW_RULES = [
+  {id:"length", label:"At least 12 characters", test:p=>p.length>=12},
+  {id:"upper", label:"An uppercase letter (A–Z)", test:p=>/[A-Z]/.test(p)},
+  {id:"lower", label:"A lowercase letter (a–z)", test:p=>/[a-z]/.test(p)},
+  {id:"number", label:"A number (0–9)", test:p=>/[0-9]/.test(p)},
+  {id:"special", label:"A special character (!@#$…)", test:p=>/[^A-Za-z0-9]/.test(p)}
+];
+
+function passwordChecks(p){
+  const value=String(p||"");
+  const out={};
+  for(const rule of PW_RULES) out[rule.id]=rule.test(value);
+  return out;
+}
+
+function isStrongPassword(p){
+  const c=passwordChecks(p);
+  return PW_RULES.every(rule=>c[rule.id]);
+}
+
+function isValidEmail(value){
+  return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(String(value||"").trim());
+}
+
+let mode = "login"; // login | signup | 2fa-verify
+let otpInfo = null;
+
+function shell(inner){
+  return `
+    <div style="max-width:520px;margin:0 auto;padding:0 20px;">
+      <div style="display:flex;align-items:center;justify-content:space-between;padding:28px 0 24px;border-bottom:1px solid ${C.border};margin-bottom:36px">
+        <div style="font-family:inherit;font-size:24px;font-weight:600;color:${C.text}">Lingo<span style="color:${C.accent}">Check</span></div>
+        <a href="/" style="text-decoration:none;font-size:12px;color:${C.muted};border:1px solid ${C.border};padding:6px 14px;border-radius:10px;background:${C.soft}">← Client Portal</a>
+      </div>
+      <div style="animation:fadeUp .25s ease;${styleStr(st.card)}">${inner}</div>
+    </div>
+  `;
+}
+
+function renderPasswordChecklist(password){
+  const checks=passwordChecks(password);
+  return `<ul class="pw-list">${PW_RULES.map(rule=>{
+    const ok=!!checks[rule.id];
+    return `<li class="${ok?"ok":""}" data-rule="${rule.id}"><span class="pw-dot">${ok?"✓":""}</span>${rule.label}</li>`;
+  }).join("")}</ul>`;
+}
+
+function bindPasswordChecklist(input){
+  const update=()=>{
+    const checks=passwordChecks(input.value);
+    document.querySelectorAll(".pw-list li").forEach(li=>{
+      const ok=!!checks[li.dataset.rule];
+      li.classList.toggle("ok", ok);
+      const dot=li.querySelector(".pw-dot");
+      if(dot) dot.textContent=ok?"✓":"";
+    });
+    const btn=qs("#btn");
+    if(btn && mode==="signup") btn.disabled=!isStrongPassword(input.value);
+  };
+  input.addEventListener("input", update);
+  input.addEventListener("keyup", update);
+  update();
+}
 
 function render(){
-  const isLogin = mode === "login";
   const root = qs("#app");
-  root.innerHTML = `
-    <div style="max-width:520px;margin:0 auto;padding:0 20px;">
-      <div style="display:flex;align-items:center;justify-content:space-between;padding:24px 0 32px;border-bottom:1px solid ${C.border};margin-bottom:32px">
-        <div style="font-family:'Playfair Display',serif;font-size:24px;font-weight:600;color:${C.white}">Lingo<span style="color:${C.light}">Check</span></div>
-        <a href="/" style="text-decoration:none;font-size:12px;color:${C.muted};border:1px solid ${C.border};padding:6px 14px;border-radius:12px;background:rgba(255,255,255,0.04);box-shadow:0 10px 30px rgba(0,0,0,0.18)">← Client Portal</a>
-      </div>
+  if(mode==="2fa-verify"){
+    const delivered = !!otpInfo?.delivered;
+    root.innerHTML = shell(`
+      <div style="font-family:inherit;font-size:30px;font-weight:400;color:${C.text};margin-bottom:8px">Check your email</div>
+      <div style="${styleStr(st.muted)};line-height:1.7;margin-bottom:18px">We sent a 6-digit sign-in code to <strong style="color:${C.text}">${otpInfo?.emailMasked || "your email"}</strong>. Enter it below. It expires in 10 minutes.</div>
+      ${delivered?"":`
+        <div class="code-box">
+          <div style="font-size:11px;font-weight:600;letter-spacing:1.2px;text-transform:uppercase;color:${C.accent}">Email isn’t configured yet — use this code</div>
+          <div class="digits" id="shownCode">${otpInfo?.code || "••••••"}</div>
+        </div>
+      `}
+      <label style="${styleStr(st.label)}" for="code">Email code</label>
+      <input id="code" class="otp" inputmode="numeric" autocomplete="one-time-code" maxlength="6" placeholder="000000" style="${styleStr(st.inp)}" />
+      <div id="err" style="display:none;margin-top:14px;font-size:12px;color:#c43d3d"></div>
+      <button id="btn" style="margin-top:18px;${styleStr(st.btn)};width:100%;padding:14px;background:${C.accent};font-size:15px;color:${C.white}">Verify</button>
+      <button id="resend" style="margin-top:10px;${styleStr(st.btn)};width:100%;padding:10px;background:transparent;border:1px solid ${C.border};color:${C.muted};font-size:13px">Send a new code</button>
+      <button id="back" style="margin-top:8px;${styleStr(st.btn)};width:100%;padding:10px;background:transparent;border:none;color:${C.muted};font-size:13px">← Back to login</button>
+    `);
+    qs("#back").addEventListener("click", ()=>{ mode="login"; otpInfo=null; render(); });
+    bindVerify();
+    return;
+  }
 
-      <div style="animation:fadeUp .35s ease;${styleStr(st.card)}">
+  const isLogin = mode === "login";
+  root.innerHTML = shell(`
         <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px">
-          <div style="font-family:'Playfair Display',serif;font-size:30px;font-weight:400;color:${C.white}">${isLogin?"Revisor login":"Create revisor account"}</div>
+          <div style="font-family:inherit;font-size:30px;font-weight:400;color:${C.text}">${isLogin?"Revisor login":"Create revisor account"}</div>
         </div>
         <div style="${styleStr(st.muted)};line-height:1.7;margin-bottom:18px">
           ${isLogin?"Log in to access your queue, assignments and finance.":"Sign up to start claiming and reviewing translations."}
         </div>
 
         <div style="display:flex;gap:8px;margin-bottom:18px">
-          <button id="tabLogin" style="${styleStr(st.btn)};flex:1;padding:10px;font-size:13px;background:${isLogin?"rgba(124,92,219,0.22)":"rgba(255,255,255,0.04)"};border:1px solid ${isLogin?"rgba(124,92,219,0.45)":C.border};color:${isLogin?C.pale:C.muted}">Log in</button>
-          <button id="tabSignup" style="${styleStr(st.btn)};flex:1;padding:10px;font-size:13px;background:${!isLogin?"rgba(124,92,219,0.22)":"rgba(255,255,255,0.04)"};border:1px solid ${!isLogin?"rgba(124,92,219,0.45)":C.border};color:${!isLogin?C.pale:C.muted}">Sign up</button>
+          <button id="tabLogin" style="${styleStr(st.btn)};flex:1;padding:10px;font-size:13px;background:${isLogin?"rgba(109,79,216,0.10)":"transparent"};border:1px solid ${isLogin?"rgba(109,79,216,0.28)":C.border};color:${isLogin?C.accent:C.muted}">Log in</button>
+          <button id="tabSignup" style="${styleStr(st.btn)};flex:1;padding:10px;font-size:13px;background:${!isLogin?"rgba(109,79,216,0.10)":"transparent"};border:1px solid ${!isLogin?"rgba(109,79,216,0.28)":C.border};color:${!isLogin?C.accent:C.muted}">Sign up</button>
         </div>
 
         ${!isLogin ? `
@@ -88,53 +176,128 @@ function render(){
           <div style="height:12px"></div>
         `:""}
 
-        <label style="${styleStr(st.label)}">Username</label>
-        <input id="u" autocomplete="username" style="${styleStr(st.inp)}" placeholder="${isLogin?"your username":"choose a username (3+ chars)"}" />
+        <label style="${styleStr(st.label)}" for="email">Email</label>
+        <input id="email" type="email" inputmode="email" autocomplete="email" required style="${styleStr(st.inp)}" placeholder="you@example.com" />
         <div style="height:12px"></div>
 
-        <label style="${styleStr(st.label)}">Password</label>
-        <input id="p" type="password" autocomplete="${isLogin?"current-password":"new-password"}" style="${styleStr(st.inp)}" placeholder="${isLogin?"••••••••":"choose a password (6+ chars)"}" />
+        <label style="${styleStr(st.label)}" for="p">Password</label>
+        <input id="p" type="password" autocomplete="${isLogin?"current-password":"new-password"}" style="${styleStr(st.inp)}" placeholder="${isLogin?"Enter your password":"Create a strong password"}" />
+        ${renderPasswordChecklist("")}
 
-        <div id="err" style="display:none;margin-top:14px;font-size:12px;color:#f09090"></div>
-        <button id="btn" style="margin-top:18px;${styleStr(st.btn)};width:100%;padding:16px;background:linear-gradient(135deg,${C.mid},${C.accent});font-size:15px;color:${C.white}">
+        <div id="err" style="display:none;margin-top:14px;font-size:12px;color:#c43d3d"></div>
+        <button id="btn" ${isLogin?"":"disabled"} style="margin-top:18px;${styleStr(st.btn)};width:100%;padding:14px;background:${C.accent};font-size:15px;color:${C.white}">
           ${isLogin?"Log in":"Create account"}
         </button>
 
-        <div style="margin-top:16px;font-size:11px;color:rgba(160,148,200,0.35);line-height:1.6">
-          Earnings: revisors are paid <strong style="color:${C.pale}">€0.025</strong> per source word of completed translations.
+        <div style="margin-top:16px;font-size:11px;color:${C.muted};line-height:1.6">
+          ${isLogin?"We’ll email you a 6-digit code to confirm it’s you.":"We’ll email you a 6-digit code next. Earnings: revisors are paid <strong style=\"color:"+C.accent+"\">€0.025</strong> per source word."}
         </div>
-      </div>
-    </div>
-  `;
+  `);
 
-  const u=qs("#u"), p=qs("#p"), err=qs("#err"), btn=qs("#btn");
+  const email=qs("#email"), p=qs("#p"), err=qs("#err"), btn=qs("#btn");
   const dn=qs("#dn");
 
   qs("#tabLogin").addEventListener("click", ()=>{ mode="login"; render(); });
   qs("#tabSignup").addEventListener("click", ()=>{ mode="signup"; render(); });
+  bindPasswordChecklist(p);
+
+  function showError(message){
+    err.textContent=message;
+    err.style.display="block";
+  }
 
   async function submit(){
     err.style.display="none";
+    const emailValue = (email.value||"").trim();
+    const password = p.value||"";
+    if(!emailValue){
+      showError("Email address is required.");
+      email.focus();
+      return;
+    }
+    if(!isValidEmail(emailValue)){
+      showError("Enter a valid email address.");
+      email.focus();
+      return;
+    }
+    if(!password){
+      showError("Password is required.");
+      p.focus();
+      return;
+    }
+    if(!isStrongPassword(password)){
+      showError("Password does not meet all requirements yet.");
+      p.focus();
+      return;
+    }
     btn.disabled=true;
     btn.textContent= isLogin ? "Logging in…" : "Creating…";
     try{
       if(isLogin){
-        await apiFetch("/api/auth/login",{method:"POST",body:JSON.stringify({username:u.value.trim(),password:p.value})});
-      }else{
-        await apiFetch("/api/auth/signup",{method:"POST",body:JSON.stringify({username:u.value.trim(),displayName:(dn?.value||"").trim(),password:p.value})});
+        const data=await apiFetch("/api/auth/login",{method:"POST",body:JSON.stringify({email:emailValue,password})});
+        if(data.requires2fa){ otpInfo={code:data.code, emailMasked:data.emailMasked, delivered:!!data.delivered}; mode="2fa-verify"; render(); return; }
+        location.href="/revisor";
+        return;
       }
-      location.href="/revisor";
+      const data=await apiFetch("/api/auth/signup",{method:"POST",body:JSON.stringify({email:emailValue,displayName:(dn?.value||"").trim(),password})});
+      otpInfo={code:data.code, emailMasked:data.emailMasked, delivered:!!data.delivered};
+      mode="2fa-verify";
+      render();
     }catch(e){
-      err.textContent=e.message;
-      err.style.display="block";
-      btn.disabled=false;
+      showError(e.message);
+      btn.disabled=!isLogin && !isStrongPassword(password);
       btn.textContent= isLogin ? "Log in" : "Create account";
     }
   }
   btn.addEventListener("click",submit);
   p.addEventListener("keydown",ev=>{ if(ev.key==="Enter") submit(); });
-  if(dn) dn.addEventListener("keydown",ev=>{ if(ev.key==="Enter") u.focus(); });
-  u.addEventListener("keydown",ev=>{ if(ev.key==="Enter") p.focus(); });
+  if(dn) dn.addEventListener("keydown",ev=>{ if(ev.key==="Enter") email.focus(); });
+  email.addEventListener("keydown",ev=>{ if(ev.key==="Enter") p.focus(); });
+}
+
+function bindVerify(){
+  const code=qs("#code"), err=qs("#err"), btn=qs("#btn"), resend=qs("#resend");
+  function showError(message){
+    err.textContent=message;
+    err.style.display="block";
+  }
+  async function submit(){
+    err.style.display="none";
+    const value=(code.value||"").replace(/\s/g,"");
+    if(!/^\d{6}$/.test(value)){
+      showError("Enter the 6-digit code from your email.");
+      code.focus();
+      return;
+    }
+    btn.disabled=true;
+    btn.textContent="Verifying…";
+    try{
+      await apiFetch("/api/auth/2fa/verify",{method:"POST",body:JSON.stringify({code:value})});
+      location.href="/revisor";
+    }catch(e){
+      showError(e.message);
+      btn.disabled=false;
+      btn.textContent="Verify";
+    }
+  }
+  async function sendNew(){
+    err.style.display="none";
+    resend.disabled=true;
+    try{
+      const data=await apiFetch("/api/auth/2fa/resend",{method:"POST",body:"{}"});
+      otpInfo={code:data.code, emailMasked:data.emailMasked, delivered:!!data.delivered};
+      mode="2fa-verify";
+      render();
+    }catch(e){
+      showError(e.message);
+      resend.disabled=false;
+    }
+  }
+  btn.addEventListener("click",submit);
+  resend.addEventListener("click",sendNew);
+  code.addEventListener("input",()=>{ code.value=code.value.replace(/\D/g,"").slice(0,6); });
+  code.addEventListener("keydown",ev=>{ if(ev.key==="Enter") submit(); });
+  code.focus();
 }
 
 async function boot(){

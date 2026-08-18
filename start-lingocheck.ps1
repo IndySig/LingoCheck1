@@ -8,8 +8,8 @@ function Stop-PortListener([int]$p) {
   $lines = netstat -ano | Select-String (":$p\s") | ForEach-Object { $_.Line }
   foreach ($l in $lines) {
     if ($l -match "\sLISTENING\s+(\d+)$") {
-      $pid = [int]$Matches[1]
-      try { Stop-Process -Id $pid -Force -ErrorAction SilentlyContinue } catch {}
+      $procId = [int]$Matches[1]
+      try { Stop-Process -Id $procId -Force -ErrorAction SilentlyContinue } catch {}
     }
   }
 }
