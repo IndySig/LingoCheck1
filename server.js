@@ -1104,5 +1104,5 @@ server.listen(PORT, '0.0.0.0', () => {
   if (turnstile.enabled) console.log('[LingoCheck] Cloudflare Turnstile bot check enabled');
   else console.log('[LingoCheck] Cloudflare Turnstile not configured — using challenge token + honeypot. Add TURNSTILE_SITE_KEY and TURNSTILE_SECRET_KEY to auth.local.json for production.');
   if (loadAnthropicApiKey()) console.log('[LingoCheck] Translation API ready');
-  else console.log('[LingoCheck] Translation API not configured — demo mode. Add ANTHROPIC_API_KEY to auth.local.json.');
+  else console.log('[LingoCheck] Translation API not configured — demo mode. Set ANTHROPIC_API_KEY as an environment variable (Replit Secret or shell export).');
 });
