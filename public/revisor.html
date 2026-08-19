@@ -59,29 +59,36 @@ async function apiFetch(path,opts={}){const r=await fetch(path,{headers:{"Conten
 function Spinner({size=18}){return React.createElement("span",{style:{display:"inline-block",width:size,height:size,border:"2px solid rgba(109,79,216,0.18)",borderTopColor:C.accent,borderRadius:"50%",animation:"spin 0.55s linear infinite",verticalAlign:"middle"}});}
 
 function splitSentences(text){
-  const t=(text||"").replace(/\s+/g," ").trim();
-  if(!t) return [];
-  try{
-    if(typeof Intl!=="undefined" && Intl.Segmenter){
-      const seg = new Intl.Segmenter("und", { granularity: "sentence" });
-      const out = [];
-      for(const part of seg.segment(t)){
-        const s = String(part.segment||"").trim();
-        if(s) out.push(s);
-      }
-      if(out.length) return out;
+  var raw=(text||"").trim();
+  if(!raw) return [];
+  // Split on newlines first: each non-empty line is its own unit.
+  // Handles numbered lists ("1. Question?") without merging them.
+  var lines=raw.split(/\r?\n/).map(function(l){return l.trim();}).filter(Boolean);
+  if(lines.length>1){
+    var out=[];
+    for(var li=0;li<lines.length;li++){
+      var line=lines[li];
+      var isNumbered=/^\s*\d+[.)\]]\s/.test(line);
+      if(isNumbered){ out.push(line); }
+      else{ var ss=splitSentences(line); for(var si=0;si<ss.length;si++) out.push(ss[si]); }
     }
-  }catch{}
-
-  const out = [];
-  const re = /[^.!?]+(?:[.!?]+(?:["'’”)\]]+)?)?(?:\s+|$)/g;
-  let m;
-  while((m = re.exec(t)) !== null){
-    const s = String(m[0]||"").trim();
-    if(s) out.push(s);
-    if(m.index === re.lastIndex) re.lastIndex++;
+    return out;
   }
-  return out.length ? out : [t];
+  // Single line: split on .  !  ? followed by space + uppercase letter.
+  var t=raw.replace(/\s+/g," ");
+  var out=[];
+  var re=/([.!?]["')\]]*) +(?=[A-Z\u00C0-\u024F\u0400-\u04FF])/g;
+  var last=0,m;
+  while((m=re.exec(t))!==null){
+    // Skip abbreviations: single uppercase letter before the dot
+    var before=t.slice(0,m.index);
+    if(/\b[A-Z]$/.test(before)) continue;
+    out.push(t.slice(last,m.index+m[1].length).trim());
+    last=m.index+m[0].length;
+  }
+  out.push(t.slice(last).trim());
+  var result=out.filter(Boolean);
+  return result.length?result:[t];
 }
 
 function alignTranslationToOriginalSentences(origSentences, translationText){
