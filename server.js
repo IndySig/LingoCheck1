@@ -259,13 +259,17 @@ async function sendDeliveryEmail(req, job) {
     <p style="font-size:12px;color:#6b6480;margin:20px 0 0">If you did not request this, you can ignore this email.</p>
   </div>`;
 
+  const resendKey = String(process.env.RESEND_API_KEY || readAuthFile().RESEND_API_KEY || '').trim();
   const smtp = loadSmtpConfig();
-  if (!smtp.host) {
-    console.log(`[LingoCheck] Delivery email for ${to} (SMTP not configured). Link: ${link}`);
+  if (!resendKey && !smtp.host) {
+    console.log(`[LingoCheck] Delivery email for ${to} (email not configured). Link: ${link}`);
     return { sent: false };
   }
+  const from = resendKey
+    ? String(process.env.SMTP_FROM || readAuthFile().SMTP_FROM || 'LingoCheck <noreply@lingocheck.app>').trim()
+    : smtp.from;
   try {
-    await sendSmtpMail({ ...smtp, to, subject, text, html });
+    await sendMail({ from, to, subject, text, html });
     return { sent: true };
   } catch (err) {
     console.error('[LingoCheck] Failed to send delivery email:', err.message);
@@ -280,6 +284,44 @@ function wrapTls(socket, host) {
     secure.setEncoding('utf8');
     secure.once('error', reject);
   });
+}
+
+async function sendResendMail({ apiKey, from, to, subject, text, html }) {
+  const body = JSON.stringify({ from, to, subject, text, html });
+  return new Promise((resolve, reject) => {
+    const req = require('https').request({
+      hostname: 'api.resend.com',
+      path: '/emails',
+      method: 'POST',
+      headers: {
+        'Authorization': `Bearer ${apiKey}`,
+        'Content-Type': 'application/json',
+        'Content-Length': Buffer.byteLength(body)
+      }
+    }, res => {
+      let data = '';
+      res.setEncoding('utf8');
+      res.on('data', c => data += c);
+      res.on('end', () => {
+        if (res.statusCode >= 200 && res.statusCode < 300) resolve(JSON.parse(data));
+        else reject(new Error(`Resend API error ${res.statusCode}: ${data}`));
+      });
+    });
+    req.on('error', reject);
+    req.setTimeout(15000, () => { req.destroy(); reject(new Error('Resend request timeout')); });
+    req.write(body);
+    req.end();
+  });
+}
+
+async function sendMail({ from, to, subject, text, html }) {
+  const resendKey = String(process.env.RESEND_API_KEY || readAuthFile().RESEND_API_KEY || '').trim();
+  if (resendKey) {
+    return sendResendMail({ apiKey: resendKey, from, to, subject, text, html });
+  }
+  const smtp = loadSmtpConfig();
+  if (!smtp.host) throw new Error('No email provider configured (set RESEND_API_KEY or SMTP_* variables)');
+  return sendSmtpMail({ ...smtp, to, subject, text, html });
 }
 
 async function sendSmtpMail({ host, port, secure, user, pass, from, to, subject, text, html }) {
@@ -348,14 +390,17 @@ async function sendSmtpMail({ host, port, secure, user, pass, from, to, subject,
 }
 
 async function sendLoginCodeEmail(to, code) {
+  const resendKey = String(process.env.RESEND_API_KEY || readAuthFile().RESEND_API_KEY || '').trim();
   const smtp = loadSmtpConfig();
-  if (!smtp.host) {
-    console.log(`[LingoCheck] 2FA code for ${to}: ${code} (email not configured: missing ${smtp.missing.join(', ')})`);
+  if (!resendKey && !smtp.host) {
+    console.log(`[LingoCheck] 2FA code for ${to}: ${code} (email not configured: missing ${smtp.missing?.join(', ')})`);
     return { sent: false };
   }
   try {
-    await sendSmtpMail({
-      ...smtp,
+    const smtp2 = loadSmtpConfig();
+    const from = resendKey ? (String(process.env.SMTP_FROM || readAuthFile().SMTP_FROM || 'LingoCheck <noreply@lingocheck.app>').trim()) : smtp2.from;
+    await sendMail({
+      from,
       to,
       subject: `${code} is your LingoCheck sign-in code`,
       text: `Your LingoCheck verification code is ${code}.\n\nIt expires in 10 minutes. If you didn't try to sign in, you can ignore this email.`,
