@@ -1,0 +1,15 @@
+node_modules/
+auth.local.json
+jobs.json
+revisors.json
+
+# Local/temporary tooling folders (not part of the app)
+.local/
+.vscode/
+
+# Replit metadata can contain secrets
+.replit
+
+# Local binaries/tools (large files)
+.tools/
+

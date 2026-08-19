@@ -6,19 +6,49 @@
 <title>LingoCheck — AI + Human Translation</title>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/react/18.2.0/umd/react.production.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.2.0/umd/react-dom.production.min.js"></script>
-<link href="https://fonts.googleapis.com/css2?family=Playfair+Display:ital,wght@0,400;0,600;1,400&family=DM+Sans:wght@300;400;500&display=swap" rel="stylesheet">
+<script type="module">
+  import * as pdfjsLib from "https://cdnjs.cloudflare.com/ajax/libs/pdf.js/4.8.69/pdf.min.mjs";
+  pdfjsLib.GlobalWorkerOptions.workerSrc = "https://cdnjs.cloudflare.com/ajax/libs/pdf.js/4.8.69/pdf.worker.min.mjs";
+  window.pdfjsLib = pdfjsLib;
+</script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/pdf-lib/1.17.1/pdf-lib.min.js"></script>
+<link href="https://fonts.googleapis.com/css2?family=Kufam:ital,wght@0,400;0,500;0,600;0,700;1,400&family=Manrope:wght@500;600;700&display=swap" rel="stylesheet">
 <style>
+  :root{
+    --bg:#ffffff;
+    --ink:#1c1430;
+    --muted:#6b6480;
+    --accent:#6d4fd8;
+    --border:rgba(92,70,168,0.14);
+  }
   *{margin:0;padding:0;box-sizing:border-box;}
-  body{background:#1a1030;color:#ede8ff;font-family:'DM Sans',system-ui,sans-serif;font-weight:300;min-height:100vh;}
+  body{
+    background:
+      radial-gradient(720px 280px at 10% -12%, rgba(109,79,216,0.07), transparent 58%),
+      #ffffff;
+    color:var(--ink);
+    font-family:'Kufam',system-ui,sans-serif;
+    font-weight:400;
+    min-height:100vh;
+    -webkit-font-smoothing:antialiased;
+  }
+  button,input,textarea,select{font-family:inherit;}
+  #root{position:relative;z-index:1;}
   @keyframes spin{to{transform:rotate(360deg)}}
-  @keyframes fadeUp{from{opacity:0;transform:translateY(14px)}to{opacity:1;transform:translateY(0)}}
-  @keyframes pulse{0%,100%{opacity:1}50%{opacity:0.3}}
-  @keyframes glow{0%,100%{box-shadow:0 0 0 0 rgba(124,92,219,0)}50%{box-shadow:0 0 20px 5px rgba(124,92,219,0.18)}}
-  textarea:focus{border-color:rgba(124,92,219,0.55)!important;outline:none;}
-  select option{background:#2a1a58;}
+  @keyframes fadeUp{from{opacity:0;transform:translateY(6px)}to{opacity:1;transform:translateY(0)}}
+  @keyframes pulse{0%,100%{opacity:1}50%{opacity:0.35}}
+  @keyframes glow{0%,100%{border-color:rgba(109,79,216,0.18)}50%{border-color:rgba(109,79,216,0.42)}}
+  a,button{transition:transform .1s ease, background .12s ease, border-color .12s ease, color .12s ease, opacity .12s ease;}
+  button:not(:disabled):active{transform:translateY(1px);}
+  a:hover,button:hover{opacity:0.92}
+  textarea:focus,input:focus,select:focus{border-color:var(--accent)!important;outline:none;box-shadow:0 0 0 3px rgba(109,79,216,0.12);}
+  select option{background:#ffffff;color:#1c1430;}
   button:disabled{opacity:0.5;cursor:not-allowed;}
-  ::-webkit-scrollbar{width:5px;}
-  ::-webkit-scrollbar-thumb{background:rgba(160,130,240,0.3);border-radius:3px;}
+  ::placeholder{color:#9a93ad;}
+  ::-webkit-scrollbar{width:6px;}
+  ::-webkit-scrollbar-thumb{background:rgba(109,79,216,0.22);border-radius:3px;}
+  .hp{position:absolute;left:-10000px;top:auto;width:1px;height:1px;overflow:hidden;}
 </style>
 </head>
 <body>
@@ -26,182 +56,1012 @@
 <script>
 const {useState,useEffect,useCallback,useRef}=React;
 
-const C={deep:"#1a1030",mid:"#4a2fa0",accent:"#7c5cdb",light:"#a98df0",pale:"#c9b8f8",surface:"#221545",card:"#2a1a58",border:"rgba(160,130,240,0.18)",text:"#ede8ff",muted:"#a094c8",white:"#ffffff",green:"#7dd4a8",greenBg:"rgba(100,200,150,0.07)",greenBorder:"rgba(100,200,150,0.2)",amber:"#e8d080",amberBg:"rgba(255,200,80,0.06)",amberBorder:"rgba(255,200,80,0.15)"};
-const st={card:{background:C.card,border:`1px solid ${C.border}`,borderRadius:20,padding:28},btn:{fontFamily:"inherit",cursor:"pointer",border:"none",borderRadius:12,fontWeight:500,transition:"opacity 0.2s"},label:{fontSize:11,fontWeight:500,letterSpacing:"1.2px",textTransform:"uppercase",color:C.light,marginBottom:10,display:"block"},ta:{width:"100%",background:"rgba(255,255,255,0.04)",border:`1px solid ${C.border}`,borderRadius:12,padding:14,fontFamily:"inherit",fontSize:14,color:C.text,lineHeight:1.7,resize:"vertical",boxSizing:"border-box"},muted:{fontSize:13,color:C.muted}};
+const C={deep:"#1c1430",mid:"#5b3fc4",accent:"#6d4fd8",light:"#6d4fd8",pale:"#6d4fd8",surface:"#ffffff",card:"#ffffff",border:"rgba(92,70,168,0.14)",text:"#1c1430",muted:"#6b6480",white:"#ffffff",green:"#187a4c",greenBg:"#eef8f2",greenBorder:"rgba(24,122,76,0.22)",amber:"#8a6800",amberBg:"#fff8e6",amberBorder:"rgba(138,104,0,0.22)",soft:"#f7f5fb",error:"#c43d3d"};
+const st={
+  card:{background:"#ffffff",border:`1px solid ${C.border}`,borderRadius:14,padding:28},
+  btn:{fontFamily:"inherit",cursor:"pointer",border:"none",borderRadius:10,fontWeight:600,transition:"opacity 0.12s, background 0.12s, border-color 0.12s"},
+  label:{fontSize:11,fontWeight:600,letterSpacing:"1.2px",textTransform:"uppercase",color:C.accent,marginBottom:10,display:"block"},
+  ta:{width:"100%",background:C.soft,border:`1px solid ${C.border}`,borderRadius:10,padding:14,fontFamily:"inherit",fontSize:14,color:C.text,lineHeight:1.7,resize:"vertical",boxSizing:"border-box"},
+  muted:{fontSize:13,color:C.muted}
+};
 
-function genId(){return Date.now().toString(36)+Math.random().toString(36).slice(2,6);}
-function getClientId(){let id=localStorage.getItem("lc_cid");if(!id){id=genId();localStorage.setItem("lc_cid",id);}return id;}
+const LINGO_PER_WORD_EUR = 0.04;
+const AGENCY_PER_WORD_EUR = 0.10;
 
-async function apiFetch(path,opts={}){const r=await fetch(path,{headers:{"Content-Type":"application/json"},...opts});if(!r.ok){const e=await r.json();throw new Error(e.error||"Request failed");}return r.json();}
+function formatEuro(amount){
+  const n = Math.round(Number(amount || 0) * 100) / 100;
+  return "€" + n.toLocaleString("en-GB", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+}
 
-function Spinner({size=18}){return React.createElement("span",{style:{display:"inline-block",width:size,height:size,border:"2px solid rgba(255,255,255,0.15)",borderTopColor:C.pale,borderRadius:"50%",animation:"spin 0.7s linear infinite",verticalAlign:"middle"}});}
+function getClientId(){
+  let id=localStorage.getItem("lc_cid");
+  if(id && /^[A-Za-z0-9_-]{6,64}$/.test(id)) return id;
+  const bytes=new Uint8Array(16);
+  crypto.getRandomValues(bytes);
+  id=Array.from(bytes,b=>b.toString(16).padStart(2,"0")).join("");
+  localStorage.setItem("lc_cid",id);
+  return id;
+}
+
+function isValidEmail(value){
+  return /^[A-Za-z0-9._%+\-]+@[A-Za-z0-9.\-]+\.[A-Za-z]{2,}$/i.test(String(value||"").trim());
+}
+
+function savedEmail(){
+  try{ return String(localStorage.getItem("lc_email")||""); }catch{ return ""; }
+}
+
+async function apiFetch(path,opts={}){
+  const r=await fetch(path,{headers:{"Content-Type":"application/json"},...opts});
+  const data=await r.json().catch(()=>({}));
+  if(!r.ok) throw new Error(data.error||(r.status===429?"Too many requests. Please wait and try again.":"Request failed"));
+  return data;
+}
+
+function honeypotValue(){
+  const el=document.getElementById("lc_hp_fax");
+  return el?String(el.value||""):"";
+}
+
+function Spinner({size=18}){return React.createElement("span",{style:{display:"inline-block",width:size,height:size,border:"2px solid rgba(109,79,216,0.18)",borderTopColor:C.accent,borderRadius:"50%",animation:"spin 0.55s linear infinite",verticalAlign:"middle"}});}
+
+async function fileToArrayBuffer(file){
+  return new Promise((resolve,reject)=>{const r=new FileReader();r.onload=()=>resolve(r.result);r.onerror=reject;r.readAsArrayBuffer(file);});
+}
+
+function arrayBufferToBase64(buf){
+  const bytes = new Uint8Array(buf);
+  let binary = "";
+  const chunk = 0x8000;
+  for(let i=0;i<bytes.length;i+=chunk){
+    binary += String.fromCharCode.apply(null, bytes.subarray(i,i+chunk));
+  }
+  return btoa(binary);
+}
+
+function base64ToUint8Array(b64){
+  const bin = atob(b64);
+  const bytes = new Uint8Array(bin.length);
+  for(let i=0;i<bin.length;i++) bytes[i]=bin.charCodeAt(i);
+  return bytes;
+}
+
+function hasPdfImages(uint8){
+  try{
+    const head = new TextDecoder("latin1").decode(uint8.slice(0, Math.min(uint8.length, 350000)));
+    return head.includes("/Subtype /Image") || head.includes("/Image");
+  }catch{ return false; }
+}
+
+async function extractPdfText(fileOrBuf){
+  if(!window.pdfjsLib) throw new Error("PDF support not loaded");
+  const buf = fileOrBuf instanceof ArrayBuffer ? fileOrBuf : await fileToArrayBuffer(fileOrBuf);
+  const uint8 = new Uint8Array(buf);
+  const images = hasPdfImages(uint8);
+  const doc = await pdfjsLib.getDocument({ data: uint8.slice(), isEvalSupported: false, disableFontFace: true }).promise;
+  const pageTexts = [];
+  for(let i=1;i<=doc.numPages;i++){
+    const page = await doc.getPage(i);
+    const content = await page.getTextContent();
+    const text = content.items.map(it=>it.str).join(" ").replace(/\s+/g," ").trim();
+    if(text) pageTexts.push(text);
+  }
+  const cleaned = pageTexts.join("\n\n").trim();
+  const tooLittle = cleaned.replace(/\s+/g,"").length < 30;
+  return { text: cleaned, hasImages: images, isScannedLike: tooLittle };
+}
+
+async function extractDocxText(fileOrBuf){
+  if(!window.JSZip) throw new Error("DOCX support not loaded");
+  const buf = fileOrBuf instanceof ArrayBuffer ? fileOrBuf : await fileToArrayBuffer(fileOrBuf);
+  const zip = await JSZip.loadAsync(buf);
+  const files = Object.keys(zip.files);
+  if(files.some(n => /vbaProject\.bin|vbaData\.xml|word\/macros\//i.test(n))){
+    return { text:"", hasImages:true, hasDrawing:true, blocked:true };
+  }
+  const hasMedia = files.some(n => n.startsWith("word/media/"));
+  const docFile = zip.file("word/document.xml");
+  if(!docFile) return { text:"", hasImages: hasMedia, hasDrawing: false };
+  const xmlStr = await docFile.async("string");
+  const xml = new DOMParser().parseFromString(xmlStr, "application/xml");
+  const nodes = Array.from(xml.getElementsByTagName("*"));
+  const hasDrawing = nodes.some(n => (n.localName==="drawing" || n.localName==="pict"));
+  const paragraphs = Array.from(xml.getElementsByTagNameNS("*","p")).map(p=>{
+    const tNodes = Array.from(p.getElementsByTagNameNS("*","t"));
+    return tNodes.map(n=>n.textContent||"").join("").replace(/\s+/g," ").trim();
+  }).filter(Boolean);
+  const text = paragraphs.join("\n\n");
+  return { text, hasImages: hasMedia, hasDrawing, blocked:false };
+}
+
+function downloadBlob(blob, filename){
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = filename;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  setTimeout(()=>URL.revokeObjectURL(url), 1000);
+}
+
+function escapeXml(s){
+  return String(s||"")
+    .replaceAll("&","&amp;")
+    .replaceAll("<","&lt;")
+    .replaceAll(">","&gt;")
+    .replaceAll("\"","&quot;")
+    .replaceAll("'","&apos;");
+}
+
+async function makeDocxBlobFromText(text){
+  if(!window.JSZip) throw new Error("DOCX support not loaded");
+  const zip = new JSZip();
+  zip.file("[Content_Types].xml", `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">
+  <Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>
+  <Default Extension="xml" ContentType="application/xml"/>
+  <Override PartName="/word/document.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/>
+  <Override PartName="/docProps/core.xml" ContentType="application/vnd.openxmlformats-package.core-properties+xml"/>
+  <Override PartName="/docProps/app.xml" ContentType="application/vnd.openxmlformats-officedocument.extended-properties+xml"/>
+</Types>`);
+
+  zip.folder("_rels").file(".rels", `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
+  <Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="word/document.xml"/>
+  <Relationship Id="rId2" Type="http://schemas.openxmlformats.org/package/2006/relationships/metadata/core-properties" Target="docProps/core.xml"/>
+  <Relationship Id="rId3" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/extended-properties" Target="docProps/app.xml"/>
+</Relationships>`);
+
+  const lines = String(text||"").split(/\n{2,}/g).map(s=>s.trim()).filter(Boolean);
+  const paras = (lines.length?lines:[String(text||"").trim()]).map(p=>{
+    const run = escapeXml(p).split(/\n/g).map(x=>x.trim()).filter(Boolean).join(" ");
+    return `<w:p><w:r><w:t xml:space="preserve">${run}</w:t></w:r></w:p>`;
+  }).join("");
+
+  zip.folder("word").file("document.xml", `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">
+  <w:body>
+    ${paras}
+    <w:sectPr/>
+  </w:body>
+</w:document>`);
+
+  zip.folder("word").folder("_rels").file("document.xml.rels", `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"></Relationships>`);
+
+  const now = new Date().toISOString();
+  zip.folder("docProps").file("core.xml", `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<cp:coreProperties xmlns:cp="http://schemas.openxmlformats.org/package/2006/metadata/core-properties"
+ xmlns:dc="http://purl.org/dc/elements/1.1/"
+ xmlns:dcterms="http://purl.org/dc/terms/"
+ xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance">
+  <dc:title>Translation</dc:title>
+  <dc:creator>LingoCheck</dc:creator>
+  <cp:lastModifiedBy>LingoCheck</cp:lastModifiedBy>
+  <dcterms:created xsi:type="dcterms:W3CDTF">${now}</dcterms:created>
+  <dcterms:modified xsi:type="dcterms:W3CDTF">${now}</dcterms:modified>
+</cp:coreProperties>`);
+
+  zip.folder("docProps").file("app.xml", `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<Properties xmlns="http://schemas.openxmlformats.org/officeDocument/2006/extended-properties"
+ xmlns:vt="http://schemas.openxmlformats.org/officeDocument/2006/docPropsVTypes">
+  <Application>LingoCheck</Application>
+</Properties>`);
+
+  const buf = await zip.generateAsync({ type: "uint8array" });
+  return new Blob([buf], { type: "application/vnd.openxmlformats-officedocument.wordprocessingml.document" });
+}
+
+function decodeXmlText(s){
+  return String(s||"")
+    .replace(/&amp;/g,"&")
+    .replace(/&lt;/g,"<")
+    .replace(/&gt;/g,">")
+    .replace(/&quot;/g,'"')
+    .replace(/&apos;/g,"'");
+}
+
+function collectDocxParagraphTexts(xmlStr){
+  const texts = [];
+  const re = /<w:p\b[\s\S]*?<\/w:p>/g;
+  let m;
+  while((m = re.exec(xmlStr))){
+    const parts = [...m[0].matchAll(/<w:t\b[^>]*>([\s\S]*?)<\/w:t>/g)].map(x=>decodeXmlText(x[1]));
+    const text = parts.join("").replace(/\s+/g," ").trim();
+    if(text) texts.push(text);
+  }
+  return texts;
+}
+
+function alignTranslatedParagraphs(translated, originalTexts){
+  const originals = (originalTexts||[]).filter(Boolean);
+  if(!originals.length) return [String(translated||"").trim()];
+  const parts = String(translated||"").split(/\n{2,}/g).map(s=>s.trim()).filter(Boolean);
+  if(parts.length === originals.length) return parts;
+  if(parts.length > 1 && Math.abs(parts.length - originals.length) <= 1){
+    if(parts.length < originals.length){
+      while(parts.length < originals.length) parts.push("");
+      return parts;
+    }
+    const head = parts.slice(0, originals.length-1);
+    return [...head, parts.slice(originals.length-1).join(" ")];
+  }
+  const weights = originals.map(s=>Math.max(1, String(s).replace(/\s+/g,"").length));
+  return splitTextByWeights(String(translated||"").replace(/\n+/g," "), weights);
+}
+
+function replaceDocxParagraphTexts(xmlStr, newTexts){
+  let slot = 0;
+  return xmlStr.replace(/<w:p\b[\s\S]*?<\/w:p>/g, block=>{
+    const found = [...block.matchAll(/<w:t\b([^>]*)>([\s\S]*?)<\/w:t>/g)];
+    if(!found.length) return block;
+    const original = found.map(x=>decodeXmlText(x[2])).join("").replace(/\s+/g," ").trim();
+    if(!original) return block;
+    const next = newTexts[slot] || "";
+    slot += 1;
+    let used = false;
+    return block.replace(/<w:t\b([^>]*)>([\s\S]*?)<\/w:t>/g, (full, attrs)=>{
+      if(!used){
+        used = true;
+        const a = /xml:space\s*=/.test(attrs) ? attrs : `${attrs} xml:space="preserve"`;
+        return `<w:t${a}>${escapeXml(next)}</w:t>`;
+      }
+      return `<w:t${attrs}></w:t>`;
+    });
+  });
+}
+
+async function makeStyledDocxBlobFromTemplate(templateDocxB64, translatedText){
+  if(!window.JSZip) throw new Error("DOCX support not loaded");
+  const bytes = base64ToUint8Array(templateDocxB64);
+  const zip = await JSZip.loadAsync(bytes);
+  const docFile = zip.file("word/document.xml");
+  if(!docFile) throw new Error("DOCX template missing document.xml");
+  const xmlStr = await docFile.async("string");
+  const originals = collectDocxParagraphTexts(xmlStr);
+  const slots = alignTranslatedParagraphs(translatedText, originals);
+  zip.file("word/document.xml", replaceDocxParagraphTexts(xmlStr, slots));
+  const out = await zip.generateAsync({ type:"uint8array" });
+  return new Blob([out], { type: "application/vnd.openxmlformats-officedocument.wordprocessingml.document" });
+}
+
+function winAnsiSafe(s){
+  return String(s||"").replace(/[^\x09\x0A\x0D\x20-\x7E\xA0-\xFF]/g, "?");
+}
+
+function wrapPdfLine(font, str, fontSize, maxWidth){
+  const words = String(str||"").split(/\s+/).filter(Boolean);
+  if(!words.length) return [""];
+  const lines = [];
+  let cur = "";
+  for(const w of words){
+    const test = cur ? (cur + " " + w) : w;
+    const width = font.widthOfTextAtSize(test, fontSize);
+    if(width <= maxWidth){
+      cur = test;
+    }else{
+      if(cur) lines.push(cur);
+      cur = w;
+    }
+  }
+  if(cur) lines.push(cur);
+  return lines;
+}
+
+function splitTextByWeights(text, weights){
+  const words = String(text||"").split(/\s+/).filter(Boolean);
+  if(!weights.length) return [words.join(" ")];
+  const total = weights.reduce((a,b)=>a+b,0) || 1;
+  const result = [];
+  let idx = 0;
+  for(let i=0;i<weights.length;i++){
+    const take = i === weights.length-1
+      ? words.length - idx
+      : Math.max(0, Math.round(words.length * (weights[i] / total)));
+    result.push(words.slice(idx, idx + take).join(" "));
+    idx += take;
+  }
+  if(idx < words.length && result.length){
+    result[result.length-1] = [result[result.length-1], words.slice(idx).join(" ")].filter(Boolean).join(" ");
+  }
+  return result;
+}
+
+function groupPdfLines(items){
+  if(!items.length) return [];
+  const sorted = items.slice().sort((a,b)=>(b.y-a.y)||(a.x-b.x));
+  const lines = [];
+  for(const it of sorted){
+    const last = lines[lines.length-1];
+    const tol = Math.max(2, (it.fontSize||11)*0.35);
+    if(last && Math.abs(last.y-it.y)<=tol) last.items.push(it);
+    else lines.push({ y: it.y, items:[it] });
+  }
+  return lines.map(line=>{
+    const its = line.items.slice().sort((a,b)=>a.x-b.x);
+    const fontSize = its.reduce((s,i)=>s+i.fontSize,0)/its.length;
+    return {
+      x: Math.min(...its.map(i=>i.x)),
+      y: Math.min(...its.map(i=>i.y)),
+      x2: Math.max(...its.map(i=>i.x+i.width)),
+      y2: Math.max(...its.map(i=>i.y+(i.height||i.fontSize))),
+      fontSize,
+      text: its.map(i=>i.str).join(" ")
+    };
+  });
+}
+
+function drawPdfLineText(page, font, text, line){
+  const safe = winAnsiSafe(text);
+  if(!safe) return;
+  const width = Math.max(12, line.x2 - line.x);
+  let size = line.fontSize || 11;
+  while(size > 5 && font.widthOfTextAtSize(safe, size) > width) size -= 0.25;
+  const pad = Math.max(1, size * 0.12);
+  page.drawRectangle({
+    x: line.x - pad,
+    y: line.y - pad,
+    width: width + pad * 2,
+    height: Math.max(size, line.y2 - line.y) + pad * 2,
+    color: PDFLib.rgb(1,1,1)
+  });
+  if(font.widthOfTextAtSize(safe, size) <= width){
+    page.drawText(safe, { x: line.x, y: line.y, size, font, color: PDFLib.rgb(0,0,0) });
+    return;
+  }
+  const wrapped = wrapPdfLine(font, safe, size, width);
+  let y = line.y;
+  for(const ln of wrapped){
+    if(!ln) continue;
+    page.drawText(ln, { x: line.x, y, size, font, color: PDFLib.rgb(0,0,0) });
+    y -= size * 1.12;
+  }
+}
+
+async function makeStyledPdfBlobFromTemplate(templatePdfB64, translatedText){
+  if(!window.pdfjsLib || !window.PDFLib) throw new Error("PDF support not loaded");
+  const bytes = base64ToUint8Array(templatePdfB64);
+  const pdfDoc = await PDFLib.PDFDocument.load(bytes);
+  const font = await pdfDoc.embedFont(PDFLib.StandardFonts.Helvetica);
+  const src = await pdfjsLib.getDocument({ data: bytes.slice(), isEvalSupported: false, disableFontFace: true }).promise;
+  const pageLayouts = [];
+  for(let i=1;i<=src.numPages;i++){
+    const page = await src.getPage(i);
+    const content = await page.getTextContent();
+    const items = [];
+    for(const it of content.items){
+      if(!it.str || !String(it.str).trim()) continue;
+      const t = it.transform || [1,0,0,1,0,0];
+      const fontSize = Math.max(5, Math.min(72, Math.hypot(t[0], t[1]) || 11));
+      items.push({
+        str: it.str,
+        x: t[4],
+        y: t[5],
+        width: it.width || fontSize * String(it.str).length * 0.5,
+        height: it.height || fontSize,
+        fontSize
+      });
+    }
+    const lines = groupPdfLines(items);
+    pageLayouts.push({
+      lines,
+      text: lines.map(l=>l.text).join(" ")
+    });
+  }
+  if(!pageLayouts.some(p=>p.lines.length)){
+    throw new Error("Could not read the original PDF layout");
+  }
+  const pageWeights = pageLayouts.map(p=>Math.max(1, String(p.text||"").replace(/\s+/g,"").length));
+  const pageChunks = splitTextByWeights(translatedText, pageWeights);
+  const pages = pdfDoc.getPages();
+  pageLayouts.forEach((layout, pageIndex)=>{
+    const page = pages[pageIndex];
+    if(!page || !layout.lines.length) return;
+    const lineWeights = layout.lines.map(l=>Math.max(1, String(l.text||"").replace(/\s+/g,"").length));
+    const lineChunks = splitTextByWeights(pageChunks[pageIndex] || "", lineWeights);
+    layout.lines.forEach((line, i)=>drawPdfLineText(page, font, lineChunks[i] || "", line));
+  });
+  const out = await pdfDoc.save();
+  return new Blob([out], { type: "application/pdf" });
+}
+
+async function makePdfBlobFromText(text){
+  if(!window.PDFLib) throw new Error("PDF export not loaded");
+  const { PDFDocument, StandardFonts } = PDFLib;
+  const pdfDoc = await PDFDocument.create();
+  const font = await pdfDoc.embedFont(StandardFonts.Helvetica);
+  const fontSize = 11;
+  const margin = 50;
+  const lineHeight = 14;
+
+  function wrapLine(str, maxWidth){
+    const words = str.split(/\s+/).filter(Boolean);
+    const lines = [];
+    let cur = "";
+    for(const w of words){
+      const test = cur ? (cur + " " + w) : w;
+      const width = font.widthOfTextAtSize(test, fontSize);
+      if(width <= maxWidth){
+        cur = test;
+      }else{
+        if(cur) lines.push(cur);
+        cur = w;
+      }
+    }
+    if(cur) lines.push(cur);
+    return lines;
+  }
+
+  const paragraphs = String(text||"").split(/\n{2,}/g);
+  let page = pdfDoc.addPage();
+  let { width, height } = page.getSize();
+  let y = height - margin;
+  const maxWidth = width - margin*2;
+
+  for(const para of paragraphs){
+    const raw = para.replace(/\s+/g," ").trim();
+    const lines = raw ? wrapLine(raw, maxWidth) : [""];
+    for(const line of lines){
+      if(y < margin){
+        page = pdfDoc.addPage();
+        ({ width, height } = page.getSize());
+        y = height - margin;
+      }
+      page.drawText(line, { x: margin, y, size: fontSize, font, color: PDFLib.rgb(0,0,0) });
+      y -= lineHeight;
+    }
+    y -= lineHeight; // paragraph gap
+  }
+
+  const bytes = await pdfDoc.save();
+  return new Blob([bytes], { type: "application/pdf" });
+}
 
 // ══════════════════════════════════════════════════════
-// ROOT
+// ROOT (Client portal only)
 // ══════════════════════════════════════════════════════
 function App(){
-  const[view,setView]=useState("client");
-  const[jobs,setJobs]=useState([]);
   const clientId=useRef(getClientId());
-
-  const refresh=useCallback(async()=>{try{const loaded=await apiFetch("/api/jobs");setJobs(loaded);}catch{};},[]);
-  useEffect(()=>{refresh();const t=setInterval(refresh,2500);return()=>clearInterval(t);},[refresh]);
-
-  const createJob=async(job)=>{const j=await apiFetch("/api/jobs",{method:"POST",body:JSON.stringify(job)});setJobs(prev=>[...prev,j]);return j;};
-  const updateJob=async(id,patch)=>{const j=await apiFetch(`/api/jobs/${id}`,{method:"PATCH",body:JSON.stringify(patch)});setJobs(prev=>prev.map(x=>x.id===id?j:x));return j;};
-
-  const myJobs=jobs.filter(j=>j.clientId===clientId.current);
-  const pendingJobs=jobs.filter(j=>j.status==="awaiting_review");
-
-  return React.createElement("div",{style:{background:C.deep,minHeight:"100vh",paddingBottom:60}},
-    view==="client"
-      ?React.createElement(ClientView,{allJobs:jobs,myJobs,clientId:clientId.current,createJob,updateJob,onGoRevisor:()=>setView("revisor")})
-      :React.createElement(RevisorView,{pendingJobs,allJobs:jobs,updateJob,onGoClient:()=>setView("client")})
+  return React.createElement("div",{style:{background:"transparent",minHeight:"100vh",paddingBottom:60}},
+    React.createElement(ClientView,{clientId:clientId.current})
   );
 }
 
 // ══════════════════════════════════════════════════════
 // CLIENT VIEW
 // ══════════════════════════════════════════════════════
-function ClientView({allJobs,myJobs,clientId,createJob,updateJob,onGoRevisor}){
+function ClientView({clientId}){
   const[stage,setStage]=useState("idle");
   const[inputText,setInputText]=useState("");
   const[language,setLanguage]=useState("Dutch");
   const[aiResult,setAiResult]=useState("");
-  const[currentJobId,setCurrentJobId]=useState(null);
+  const[currentJob,setCurrentJob]=useState(null);
   const[error,setError]=useState("");
+  const[fileScan,setFileScan]=useState(null); // {name, fit, reason}
+  const[fileBusy,setFileBusy]=useState(false);
+  const[sourceFile,setSourceFile]=useState(null); // {name, ext, fileB64?}
+  const[isWide,setIsWide]=useState(()=>window.matchMedia && window.matchMedia("(min-width: 980px)").matches);
+  const[turnstileSiteKey,setTurnstileSiteKey]=useState(null);
+  const[useOwnAi,setUseOwnAi]=useState(false);
+  const[clientEmail,setClientEmail]=useState(()=>savedEmail());
+  const[showFullDraft,setShowFullDraft]=useState(false);
   const fileRef=useRef();
+  const sourceFileB64Ref=useRef(null);
+  const deliveryTokenRef=useRef("");
+  const turnstileRef=useRef();
+  const turnstileWidget=useRef(null);
+  const challengeRef=useRef("");
+
+  function jobAccessQuery(){
+    const token=deliveryTokenRef.current;
+    if(token) return "token="+encodeURIComponent(token);
+    return "clientId="+encodeURIComponent(clientId);
+  }
+
+  const refreshChallenge=useCallback(async()=>{
+    try{
+      const data=await apiFetch("/api/challenge");
+      challengeRef.current=data.token||"";
+    }catch{}
+  },[]);
 
   useEffect(()=>{
-    if(!currentJobId||stage==="complete")return;
-    const job=allJobs.find(j=>j.id===currentJobId);
-    if(job?.status==="complete")setStage("complete");
-  },[allJobs,currentJobId,stage]);
+    let alive=true;
+    (async()=>{
+      try{
+        const cfg=await apiFetch("/api/public-config");
+        if(alive) setTurnstileSiteKey(cfg.turnstileSiteKey||null);
+      }catch{}
+    })();
+    refreshChallenge();
+    const t=setInterval(refreshChallenge,4*60*1000);
+    return()=>{alive=false;clearInterval(t);};
+  },[refreshChallenge]);
 
-  const currentJob=allJobs.find(j=>j.id===currentJobId);
+  useEffect(()=>{
+    if(stage!=="idle"){
+      turnstileWidget.current=null;
+      return;
+    }
+    if(!turnstileSiteKey || !turnstileRef.current) return;
+    function renderWidget(){
+      if(!window.turnstile || !turnstileRef.current) return;
+      if(turnstileWidget.current!=null){
+        try{window.turnstile.reset(turnstileWidget.current);}catch{}
+        return;
+      }
+      turnstileWidget.current=window.turnstile.render(turnstileRef.current,{sitekey:turnstileSiteKey,theme:"light"});
+    }
+    if(window.turnstile){renderWidget();return;}
+    if(document.getElementById("cf-turnstile-script")) return;
+    const s=document.createElement("script");
+    s.id="cf-turnstile-script";
+    s.src="https://challenges.cloudflare.com/turnstile/v0/api.js?render=explicit";
+    s.async=true;
+    s.onload=renderWidget;
+    document.head.appendChild(s);
+  },[turnstileSiteKey, stage]);
+
+  useEffect(()=>{
+    const jobId=currentJob?.id;
+    if(!jobId||stage!=="sent") return;
+    let cancelled=false;
+    async function tick(){
+      try{
+        const job=await apiFetch("/api/jobs/"+encodeURIComponent(jobId)+"?"+jobAccessQuery());
+        if(cancelled) return;
+        setCurrentJob(prev=>{
+          const fileB64 = prev?.sourceFile?.fileB64 || sourceFileB64Ref.current || null;
+          if(!job.sourceFile) return fileB64 ? { ...job, sourceFile: { ...(prev?.sourceFile||{}), fileB64 } } : job;
+          return { ...job, sourceFile: { ...job.sourceFile, fileB64: job.sourceFile.fileB64 || fileB64 } };
+        });
+        if(job?.status==="complete") setStage("complete");
+      }catch{}
+    }
+    tick();
+    const t=setInterval(tick,4000);
+    return()=>{cancelled=true;clearInterval(t);};
+  },[stage,currentJob?.id,clientId]);
+
+  useEffect(()=>{
+    let cancelled=false;
+    async function restore(){
+      const params=new URLSearchParams(location.search);
+      const jobId=params.get("job");
+      const token=params.get("t")||params.get("token");
+      try{
+        if(jobId && token && /^[A-Za-z0-9_-]{6,64}$/.test(jobId)){
+          deliveryTokenRef.current=token;
+          const job=await apiFetch("/api/jobs/"+encodeURIComponent(jobId)+"?token="+encodeURIComponent(token));
+          if(cancelled||!job) return;
+          setCurrentJob(job);
+          setStage(job.status==="complete"?"complete":"sent");
+          try{ localStorage.setItem("lc_open_job", JSON.stringify({id:job.id})); }catch{}
+          return;
+        }
+        let saved=null;
+        try{ saved=JSON.parse(localStorage.getItem("lc_open_job")||"null"); }catch{}
+        if(saved?.id){
+          const job=await apiFetch("/api/jobs/"+encodeURIComponent(saved.id)+"?clientId="+encodeURIComponent(clientId));
+          if(cancelled||!job) return;
+          setCurrentJob(job);
+          setStage(job.status==="complete"?"complete":"sent");
+        }
+      }catch{}
+    }
+    restore();
+    return()=>{cancelled=true;};
+  },[clientId]);
+
+  useEffect(()=>{
+    if(!window.matchMedia) return;
+    const mq = window.matchMedia("(min-width: 980px)");
+    const onChange = () => setIsWide(!!mq.matches);
+    onChange();
+    if(mq.addEventListener) mq.addEventListener("change", onChange);
+    else mq.addListener(onChange);
+    return () => {
+      if(mq.removeEventListener) mq.removeEventListener("change", onChange);
+      else mq.removeListener(onChange);
+    };
+  },[]);
+
   const words=inputText.trim().split(/\s+/).filter(Boolean).length;
+  const lingoPrice=words*LINGO_PER_WORD_EUR;
+  const agencyPrice=words*AGENCY_PER_WORD_EUR;
+  const savings=Math.max(0, agencyPrice-lingoPrice);
+
+  function botFields(){
+    return {
+      challengeToken: challengeRef.current,
+      turnstileToken: (window.turnstile && turnstileWidget.current!=null) ? (window.turnstile.getResponse(turnstileWidget.current)||"") : "",
+      lc_hp_fax: honeypotValue()
+    };
+  }
 
   async function handleTranslate(){
     if(!inputText.trim()){setError("Please enter some text first.");return;}
     setError("");setStage("translating");
     try{
-      const data=await apiFetch("/api/translate",{method:"POST",body:JSON.stringify({text:inputText.trim(),language})});
-      setAiResult(data.translation);setStage("translated");
-    }catch(e){setError("Translation failed: "+e.message);setStage("idle");}
+      const payload=()=>({text:inputText.trim(),language,...botFields()});
+      if(!challengeRef.current) await refreshChallenge();
+      let data;
+      try{
+        data=await apiFetch("/api/translate",{method:"POST",body:JSON.stringify(payload())});
+      }catch(first){
+        const msg=String(first.message||"");
+        if(/Verification expired|Confirm you are human/i.test(msg)){
+          await refreshChallenge();
+          data=await apiFetch("/api/translate",{method:"POST",body:JSON.stringify(payload())});
+        }else throw first;
+      }
+      setAiResult(data.translation);setStage("translated");setShowFullDraft(false);
+      refreshChallenge();
+    }catch(e){setError("Translation failed: "+e.message);setStage("idle");refreshChallenge();}
   }
 
-  async function handleSend(){
-    const id=genId();
-    await createJob({id,clientId,originalText:inputText.trim(),language,aiTranslation:aiResult,status:"awaiting_review",revisedTranslation:null});
-    setCurrentJobId(id);setStage("sent");
+  async function handleSend(extra={}){
+    setError("");
+    const email=String(clientEmail||"").trim();
+    if(!isValidEmail(email)){
+      setError("Enter your email so we can send the finished translation.");
+      return;
+    }
+    try{ localStorage.setItem("lc_email", email); }catch{}
+    try{
+      if(!challengeRef.current) await refreshChallenge();
+      const ext = sourceFile?.ext || "txt";
+      const name = sourceFile?.name || `translation.${ext}`;
+      const qaOnly = extra.qaOnly === true || useOwnAi;
+      const j=await apiFetch("/api/jobs",{method:"POST",body:JSON.stringify({
+        clientId,
+        clientEmail: email,
+        originalText: qaOnly ? "" : inputText.trim(),
+        language,
+        aiTranslation: qaOnly ? inputText.trim() : aiResult,
+        qaOnly,
+        sourceFile: { name, ext, fileB64: sourceFile?.fileB64 || sourceFileB64Ref.current || null },
+        ...botFields()
+      })});
+      setCurrentJob({
+        ...j,
+        sourceFile: j.sourceFile
+          ? { ...j.sourceFile, fileB64: sourceFile?.fileB64 || sourceFileB64Ref.current || null }
+          : j.sourceFile
+      });
+      try{ localStorage.setItem("lc_open_job", JSON.stringify({id:j.id})); }catch{}
+      setStage("sent");
+      refreshChallenge();
+    }catch(e){
+      setError(e.message||"Could not send for review.");
+      refreshChallenge();
+    }
   }
 
-  function handleReset(){setStage("idle");setInputText("");setAiResult("");setCurrentJobId(null);setError("");}
+  async function handleCheck(){
+    if(!inputText.trim()){setError("Please paste or upload the translation first.");return;}
+    await handleSend({qaOnly:true});
+  }
 
-  function handleFile(e){
+  function handleReset(){
+    setStage("idle");setInputText("");setAiResult("");setCurrentJob(null);setError("");setSourceFile(null);setFileScan(null);setUseOwnAi(false);setShowFullDraft(false);
+    sourceFileB64Ref.current=null;
+    deliveryTokenRef.current="";
+    try{ localStorage.removeItem("lc_open_job"); }catch{}
+    if(location.search) history.replaceState({}, "", location.pathname);
+    if(fileRef.current) fileRef.current.value="";
+  }
+
+  function onToggleOwnAi(ev){
+    setUseOwnAi(!!ev.target.checked);
+    setInputText("");
+    setAiResult("");
+    setError("");
+    setFileScan(null);
+    setSourceFile(null);
+    sourceFileB64Ref.current=null;
+    if(fileRef.current) fileRef.current.value="";
+  }
+
+  async function handleFile(e){
     const file=e.target.files[0];if(!file)return;
-    if(file.size>20000){setError("File too large (max 20KB).");return;}
-    const reader=new FileReader();reader.onload=ev=>setInputText(ev.target.result);reader.readAsText(file);
+    setError("");setFileScan(null);setSourceFile(null);sourceFileB64Ref.current=null;
+    const name=(file.name||"").toLowerCase();
+    const max=4*1024*1024;
+    if(file.size>max){setError("File too large (max 4 MB).");return;}
+    setFileBusy(true);
+    try{
+      if(name.endsWith(".txt")||name.endsWith(".md")){
+        const reader=new FileReader();
+        reader.onload=ev=>{setInputText(ev.target.result||"");setFileScan({name:file.name,fit:true,reason:"Text file"});setSourceFile({name:file.name,ext:name.endsWith(".md")?"md":"txt"});setFileBusy(false);};
+        reader.onerror=()=>{setError("Could not read file.");setFileBusy(false);};
+        reader.readAsText(file);
+        return;
+      }
+      if(name.endsWith(".pdf")){
+        const buf = await fileToArrayBuffer(file);
+        const r=await extractPdfText(buf);
+        if(r.isScannedLike || !r.text){
+          setFileScan({name:file.name,fit:false,reason:"PDF has no usable text layer (likely scanned)."});
+          setInputText("");
+          return;
+        }
+        const reason = r.hasImages
+          ? "Text extracted; images will be kept on download."
+          : "PDF text extracted";
+        setInputText(r.text);
+        setFileScan({name:file.name,fit:true,reason});
+        const fileB64=arrayBufferToBase64(buf);
+        sourceFileB64Ref.current=fileB64;
+        setSourceFile({name:file.name,ext:"pdf",fileB64});
+        return;
+      }
+      if(name.endsWith(".docx")){
+        const buf = await fileToArrayBuffer(file);
+        const r=await extractDocxText(buf);
+        if(r.blocked){
+          setFileScan({name:file.name,fit:false,reason:"Word document contains macros or executable content."});
+          setInputText("");
+          return;
+        }
+        if(!r.text){
+          setFileScan({name:file.name,fit:false,reason:"Word document has no extractable text."});
+          setInputText("");
+          return;
+        }
+        const reason = (r.hasImages||r.hasDrawing)
+          ? "Text extracted; images will be kept on download."
+          : "Word text extracted";
+        setInputText(r.text);
+        setFileScan({name:file.name,fit:true,reason});
+        const fileB64=arrayBufferToBase64(buf);
+        sourceFileB64Ref.current=fileB64;
+        setSourceFile({name:file.name,ext:"docx",fileB64});
+        return;
+      }
+      setError("Unsupported file type. Upload .txt, .md, .docx, or .pdf.");
+    }catch(err){
+      setError("Could not process file: "+(err.message||"Unknown error"));
+    }finally{
+      setFileBusy(false);
+    }
+  }
+
+  async function getSourceFileB64(meta){
+    if(meta?.fileB64) return meta.fileB64;
+    if(meta?.docxB64) return meta.docxB64;
+    if(sourceFileB64Ref.current) return sourceFileB64Ref.current;
+    if(!currentJob?.id) return null;
+    try{
+      const data=await apiFetch("/api/jobs/"+encodeURIComponent(currentJob.id)+"/source?"+jobAccessQuery());
+      if(data?.fileB64) sourceFileB64Ref.current=data.fileB64;
+      return data?.fileB64 || null;
+    }catch{
+      return null;
+    }
+  }
+
+  async function downloadTranslated(){
+    const meta = currentJob.sourceFile || { name:"translation.txt", ext:"txt" };
+    const baseName = (meta.name||"translation").replace(/\.[^.]+$/,"");
+    const ext = (meta.ext||"txt").toLowerCase();
+    const text = currentJob.revisedTranslation||"";
+    const finalName = `${baseName}-translated.${ext}`;
+    if(ext==="txt"||ext==="md"){
+      return downloadBlob(new Blob([text],{type:"text/plain;charset=utf-8"}), finalName);
+    }
+    const fileB64 = await getSourceFileB64(meta);
+    if(!fileB64) throw new Error("Original file is unavailable. Open the link from your email and try again.");
+    if(ext==="docx"){
+      const blob = await makeStyledDocxBlobFromTemplate(fileB64, text);
+      return downloadBlob(blob, finalName);
+    }
+    if(ext==="pdf"){
+      const blob = await makeStyledPdfBlobFromTemplate(fileB64, text);
+      return downloadBlob(blob, finalName);
+    }
+    return downloadBlob(new Blob([text],{type:"text/plain;charset=utf-8"}), `${baseName}-translated.txt`);
   }
 
   const e=React.createElement;
 
-  const header=e("div",{style:{display:"flex",alignItems:"center",justifyContent:"space-between",padding:"24px 0 32px",borderBottom:`1px solid ${C.border}`,marginBottom:36}},
-    e("div",{style:{fontFamily:"'Playfair Display',serif",fontSize:24,fontWeight:600,color:C.white}},"Lingo",e("span",{style:{color:C.light}},"Check")),
-    e("div",{style:{display:"flex",gap:10}},
-      e("span",{style:{fontSize:11,fontWeight:500,letterSpacing:"1.5px",textTransform:"uppercase",color:C.light,background:"rgba(124,92,219,0.15)",border:"1px solid rgba(124,92,219,0.3)",padding:"6px 14px",borderRadius:20}},"Client Portal"),
-      e("button",{onClick:onGoRevisor,style:{...st.btn,background:"rgba(255,255,255,0.04)",border:`1px solid ${C.border}`,color:C.muted,fontSize:12,padding:"6px 14px"}},"Revisor Panel →")
+  const header=e("nav",{style:{position:"sticky",top:0,zIndex:40,background:"#ffffff",borderBottom:`1px solid ${C.border}`}},
+    e("div",{style:{maxWidth:1240,margin:"0 auto",padding:"12px 22px",display:"flex",alignItems:"center",justifyContent:"space-between",gap:16}},
+      e("div",{style:{display:"flex",alignItems:"center",gap:14,minWidth:0}},
+        e("div",{style:{fontFamily:"inherit",fontSize:22,fontWeight:600,color:C.text,lineHeight:1}},"Lingo",e("span",{style:{color:C.accent}},"Check")),
+        e("span",{"aria-hidden":"true",style:{width:1,height:16,background:"rgba(92,70,168,0.22)",flexShrink:0}}),
+        e("span",{style:{fontSize:13,fontWeight:500,color:C.muted,whiteSpace:"nowrap"}},"Client Portal")
+      ),
+      e("a",{href:"/revisor",style:{fontFamily:"Manrope, system-ui, sans-serif",fontSize:13,fontWeight:600,color:C.accent,textDecoration:"none",border:`1px solid rgba(109,79,216,0.32)`,background:"transparent",padding:"8px 14px",borderRadius:10,whiteSpace:"nowrap",lineHeight:1.2}},"Reviewer Portal")
     )
   );
 
-  return e("div",{style:{maxWidth:700,margin:"0 auto",padding:"0 20px"}},header,
+  return e(React.Fragment,null,header,e("div",{style:{maxWidth:1240,margin:"0 auto",padding:"40px 22px 0"}},
 
-    stage==="idle"&&e("div",{style:{animation:"fadeUp 0.4s ease"}},
-      e("h1",{style:{fontFamily:"'Playfair Display',serif",fontSize:38,fontWeight:400,lineHeight:1.2,color:C.white,marginBottom:12,maxWidth:520}},
-        "Translation made ",e("em",{style:{fontStyle:"italic",color:C.pale}},"fast")," and reliable"),
-      e("p",{style:{fontSize:15,color:C.muted,lineHeight:1.7,maxWidth:440,marginBottom:36}},"AI translates instantly. Our human revisor refines every word. Agency quality at a fraction of the cost."),
-      e("div",{style:{display:"flex",background:C.surface,border:`1px solid ${C.border}`,borderRadius:14,padding:"16px 20px",marginBottom:28,alignItems:"center"}},
-        [["📄","Upload","Text or file"],["🤖","AI translates","Seconds"],["💳","Approve","Demo: skip payment"],["👁","Revisor checks","Human quality"],["✅","Delivered","Ready to use"]].map(([icon,lbl,sub],i,arr)=>
-          e("div",{key:i,style:{flex:1,textAlign:"center",position:"relative"}},
-            i<arr.length-1&&e("span",{style:{position:"absolute",right:-4,top:"50%",transform:"translateY(-50%)",color:C.accent,fontSize:13}},"›"),
-            e("div",{style:{fontSize:16,marginBottom:4}},icon),
-            e("div",{style:{fontSize:11,fontWeight:500,color:C.pale}},lbl),
-            e("div",{style:{fontSize:10,color:C.muted,marginTop:2}},sub)
+    stage==="idle"&&e("div",{style:{animation:"fadeUp 0.25s ease"}},
+      e("div",{style:{display:"grid",gridTemplateColumns:isWide?"1.08fr 0.92fr":"1fr",gap:28,alignItems:"start"}},
+        e("div",null,
+          e("h1",{style:{fontFamily:"inherit",fontSize:isWide?46:40,fontWeight:400,lineHeight:1.12,color:C.text,marginBottom:14,maxWidth:isWide?640:560}},
+            "Translation made ",e("em",{style:{fontStyle:"italic",color:C.accent}},"fast")," and reliable"),
+          e("p",{style:{fontSize:15,color:C.muted,lineHeight:1.7,maxWidth:520,marginBottom:28}},"AI translates instantly. Our human revisor refines every word. Agency quality at a fraction of the cost."),
+          (()=>{
+            const ico=(...paths)=>e("svg",{width:18,height:18,viewBox:"0 0 24 24",fill:"none",stroke:"currentColor",strokeWidth:1.75,strokeLinecap:"round",strokeLinejoin:"round","aria-hidden":"true",focusable:"false",style:{display:"block"}},
+              ...paths.map((d,i)=>e("path",{key:i,d}))
+            );
+            const badge=child=>e("div",{"aria-hidden":"true",style:{width:32,height:32,borderRadius:8,flexShrink:0,display:"flex",alignItems:"center",justifyContent:"center",background:"rgba(109,79,216,0.08)",border:"1px solid rgba(109,79,216,0.16)",color:C.accent}},child);
+            const steps=[
+              [badge(ico("M15 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7Z","M14 2v4a2 2 0 0 0 2 2h4","M12 12v6","M15 15l-3-3-3 3")),"Upload","Paste your text or a file"],
+              [badge(ico("M4 4h16v16H4Z","M9 9h6v6H9Z","M9 1v3","M15 1v3","M9 20v3","M15 20v3","M1 9h3","M1 15h3","M20 9h3","M20 15h3")),"AI draft","Instant first translation"],
+              [badge(ico("M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2","M9 11a4 4 0 1 0 0-8 4 4 0 0 0 0 8","M16 11l2 2 4-4")),"Human revisor","A certified translator checks every word"],
+              [badge(ico("M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4","M7 10l5 5 5-5","M12 15V3")),"Delivered","Download the finished file"]
+            ];
+            const chevron=e("svg",{width:16,height:16,viewBox:"0 0 16 16","aria-hidden":"true",focusable:"false",style:{flexShrink:0,display:"block",color:C.accent}},
+              e("path",{d:"M6 3.5 L11.5 8 L6 12.5",fill:"none",stroke:"currentColor",strokeWidth:1.7,strokeLinecap:"round",strokeLinejoin:"round"})
+            );
+            const items=[];
+            steps.forEach(([icon,lbl,sub],i)=>{
+              items.push(e("div",{key:"s"+i,role:"listitem",style:{display:"flex",alignItems:"center",gap:8,minWidth:0,flex:isWide?"1 1 0":"1 1 auto",padding:isWide?"2px 4px":"2px 0"}},
+                icon,
+                e("div",{style:{minWidth:0}},
+                  e("div",{style:{fontSize:11,fontWeight:600,color:C.text,letterSpacing:"0.3px",whiteSpace:"nowrap"}},lbl),
+                  e("div",{style:{fontSize:11,color:C.muted,lineHeight:1.35}},sub)
+                )
+              ));
+              if(i<steps.length-1){
+                items.push(e("div",{key:"a"+i,"aria-hidden":"true",style:{display:"flex",alignItems:"center",justifyContent:"center",flex:"0 0 auto",padding:isWide?"0 2px":"0 6px",opacity:0.85}},chevron));
+              }
+            });
+            return e("div",{role:"list","aria-label":"How LingoCheck works",style:{display:"flex",flexDirection:"row",flexWrap:isWide?"nowrap":"wrap",alignItems:"center",gap:isWide?4:8,background:C.soft,border:`1px solid ${C.border}`,borderRadius:12,padding:isWide?"12px 14px":"12px 14px",marginBottom:isWide?0:18,pointerEvents:"none",userSelect:"none",maxWidth:isWide?640:"100%"}},...items);
+          })()
+        ),
+
+        e("div",null,
+          e("label",{htmlFor:"use-own-ai",style:{display:"flex",alignItems:"flex-start",gap:10,marginBottom:14,cursor:"pointer",userSelect:"none",padding:"12px 14px",background:useOwnAi?"rgba(109,79,216,0.06)":C.soft,border:`1px solid ${useOwnAi?"rgba(109,79,216,0.28)":C.border}`,borderRadius:12}},
+            e("input",{id:"use-own-ai",type:"checkbox",checked:useOwnAi,onChange:onToggleOwnAi,style:{marginTop:3,width:16,height:16,accentColor:C.accent,flexShrink:0,cursor:"pointer"}}),
+            e("span",null,
+              e("span",{style:{display:"block",fontSize:13,fontWeight:600,color:C.text,marginBottom:3}},"Use own AI translation for LingoCheck"),
+              e("span",{style:{display:"block",fontSize:12,color:C.muted,lineHeight:1.45}},useOwnAi?"Quality check only — we will not generate a new translation.":"Leave unchecked to let LingoCheck translate first, then send to a revisor.")
+            )
+          ),
+        e("div",{style:{...st.card,border:useOwnAi?"1px solid rgba(109,79,216,0.28)":st.card.border}},
+          e("div",{style:{display:"flex",alignItems:"center",justifyContent:"space-between",gap:10,marginBottom:12,flexWrap:"wrap"}},
+            e("span",{style:st.label},useOwnAi?"Your translation":"Your text"),
+            useOwnAi&&e("span",{style:{fontSize:10,fontWeight:600,letterSpacing:"0.8px",textTransform:"uppercase",color:C.accent,background:"rgba(109,79,216,0.08)",border:"1px solid rgba(109,79,216,0.18)",padding:"4px 10px",borderRadius:999}},"QA only")
+          ),
+          useOwnAi
+            ?e("div",{style:{background:C.amberBg,border:`1px solid ${C.amberBorder}`,borderRadius:10,padding:"10px 14px",marginBottom:16,fontSize:12,color:C.amber,lineHeight:1.55}},"Paste or upload the translation you already have. A certified translator will proofread it. LingoCheck will not run its own AI translation.")
+            :null,
+          useOwnAi
+            ?e("div",{style:{display:"flex",alignItems:"center",gap:10,marginBottom:16}},
+              e("span",{style:{fontSize:12,color:C.muted,whiteSpace:"nowrap"}},"Translation language"),
+              e("select",{value:language,onChange:ev=>setLanguage(ev.target.value),style:{flex:1,background:C.soft,border:`1px solid ${C.border}`,borderRadius:10,padding:"9px 14px",fontFamily:"inherit",fontSize:13,fontWeight:600,color:C.text,outline:"none",cursor:"pointer"}},
+                e("option",null,"Dutch"),e("option",null,"Spanish"),e("option",null,"German")
+              )
+            )
+            :e("div",{style:{display:"flex",alignItems:"center",gap:10,marginBottom:16}},
+              e("div",{style:{background:C.soft,border:`1px solid ${C.border}`,borderRadius:10,padding:"9px 14px",fontSize:13,color:C.muted}},"English"),
+              e("span",{style:{color:C.accent,fontSize:18}},"→"),
+              e("select",{value:language,onChange:ev=>setLanguage(ev.target.value),style:{flex:1,background:C.soft,border:`1px solid ${C.border}`,borderRadius:10,padding:"9px 14px",fontFamily:"inherit",fontSize:13,fontWeight:600,color:C.text,outline:"none",cursor:"pointer"}},
+                e("option",null,"Dutch"),e("option",null,"Spanish"),e("option",null,"German")
+              )
+            ),
+          e("div",{style:{position:"relative",marginBottom:14}},
+            e("textarea",{style:{...st.ta,minHeight:sourceFile?88:(isWide?220:160),maxHeight:sourceFile?140:(isWide?280:220),overflow:"auto"},placeholder:useOwnAi?'Paste the translation here…':"Paste your text here… e.g. \"We are looking for a reliable translation partner.\"",value:inputText,onChange:ev=>{setInputText(ev.target.value);if(fileScan&&fileScan.fit===false)setFileScan(null);},maxLength:4000}),
+            e("span",{style:{position:"absolute",bottom:10,right:12,fontSize:11,color:C.muted}},words," words")
+          ),
+          e("div",{style:{display:"flex",alignItems:"center",gap:10,marginBottom:20,flexWrap:"wrap"}},
+            e("input",{ref:fileRef,type:"file",accept:".txt,.md,.pdf,.docx",style:{display:"none"},onChange:handleFile}),
+            e("button",{disabled:fileBusy,onClick:()=>fileRef.current.click(),style:{...st.btn,background:"transparent",border:`1px dashed ${C.border}`,color:C.muted,padding:"8px 14px",fontSize:12}},fileBusy?"Scanning…":"Upload file"),
+            e("span",{style:{fontSize:11,color:C.muted}},".txt, .docx, .pdf · max 4 MB")
+          ),
+          fileScan&&e("div",{style:{fontSize:12,marginBottom:12,color:fileScan.fit?C.green:C.error,background:fileScan.fit?C.greenBg:"#fdf2f2",border:`1px solid ${fileScan.fit?C.greenBorder:"rgba(196,61,61,0.22)"}`,borderRadius:10,padding:"10px 12px"}},
+            e("div",{style:{fontWeight:600,marginBottom:4}},fileScan.fit?(useOwnAi?"File is fit for review":"File is fit for translation"):(useOwnAi?"File is not fit for review":"File is not fit for translation")),
+            e("div",{style:{opacity:0.9}},fileScan.name," — ",fileScan.reason)
+          ),
+          e("label",{style:{...st.label,marginBottom:8}},"Email for delivery"),
+          e("input",{type:"email",autoComplete:"email",placeholder:"you@example.com",value:clientEmail,onChange:ev=>setClientEmail(ev.target.value),style:{...st.ta,minHeight:0,resize:"none",marginBottom:8,padding:"10px 14px"}}),
+          e("div",{style:{fontSize:12,color:C.muted,marginBottom:16,lineHeight:1.5}},"We’ll email the finished translation here. You can close this page after sending."),
+          e("input",{id:"lc_hp_fax",className:"hp",tabIndex:-1,autoComplete:"off",name:"lc_hp_fax",defaultValue:""}),
+          e("div",{ref:turnstileRef,style:{marginBottom:turnstileSiteKey?14:0,minHeight:turnstileSiteKey?65:0}}),
+          error&&e("div",{style:{fontSize:12,color:C.error,marginBottom:12}},error),
+          e("button",{disabled:!!(fileScan&&fileScan.fit===false)||fileBusy,onClick:useOwnAi?handleCheck:handleTranslate,style:{...st.btn,width:"100%",padding:14,background:C.accent,fontSize:15,color:C.white}},
+            (fileScan&&fileScan.fit===false)?(useOwnAi?"File not suitable":"File not translatable"):(useOwnAi?"Check with LingoCheck":"Translate with LingoCheck")
           )
         )
-      ),
-      e("div",{style:{...st.card}},
-        e("span",{style:st.label},"Your text"),
-        e("div",{style:{display:"flex",alignItems:"center",gap:10,marginBottom:16}},
-          e("div",{style:{background:"rgba(124,92,219,0.1)",border:`1px solid ${C.border}`,borderRadius:10,padding:"9px 14px",fontSize:13,color:C.muted}},"🇬🇧 English"),
-          e("span",{style:{color:C.accent,fontSize:18}},"→"),
-          e("select",{value:language,onChange:ev=>setLanguage(ev.target.value),style:{flex:1,background:"rgba(124,92,219,0.12)",border:"1px solid rgba(124,92,219,0.35)",borderRadius:10,padding:"9px 14px",fontFamily:"inherit",fontSize:13,fontWeight:500,color:C.white,outline:"none",cursor:"pointer"}},
-            e("option",null,"Dutch"),e("option",null,"Spanish"),e("option",null,"German")
-          )
-        ),
-        e("div",{style:{position:"relative",marginBottom:14}},
-          e("textarea",{style:{...st.ta,minHeight:140},placeholder:'Paste your text here… e.g. "We are looking for a reliable translation partner."',value:inputText,onChange:ev=>setInputText(ev.target.value),maxLength:4000}),
-          e("span",{style:{position:"absolute",bottom:10,right:12,fontSize:11,color:C.muted}},words," words")
-        ),
-        e("div",{style:{display:"flex",alignItems:"center",gap:10,marginBottom:20}},
-          e("input",{ref:fileRef,type:"file",accept:".txt,.md",style:{display:"none"},onChange:handleFile}),
-          e("button",{onClick:()=>fileRef.current.click(),style:{...st.btn,background:"transparent",border:"1px dashed rgba(124,92,219,0.4)",color:C.muted,padding:"8px 14px",fontSize:12}},"📎 Upload .txt"),
-          e("span",{style:{fontSize:11,color:"rgba(160,148,200,0.4)"}},"Supports .txt · max 20 KB")
-        ),
-        error&&e("div",{style:{fontSize:12,color:"#f09090",marginBottom:12}},error),
-        e("button",{onClick:handleTranslate,style:{...st.btn,width:"100%",padding:16,background:`linear-gradient(135deg,${C.mid},${C.accent})`,fontSize:15,color:C.white}},"Translate with LingoCheck")
+        )
       )
     ),
 
-    stage==="translating"&&e("div",{style:{...st.card,textAlign:"center",padding:"60px 32px",animation:"fadeUp 0.3s ease"}},
+    stage==="translating"&&e("div",{style:{...st.card,textAlign:"center",padding:"64px 32px",animation:"fadeUp 0.25s ease"}},
       e("div",{style:{marginBottom:20}},e(Spinner,{size:26})),
-      e("div",{style:{fontFamily:"'Playfair Display',serif",fontSize:24,color:C.white,marginBottom:8}},"AI is translating…"),
+      e("div",{style:{fontFamily:"inherit",fontSize:24,color:C.text,marginBottom:8}},"AI is translating…"),
       e("div",{style:st.muted},"Processing your text with our language model")
     ),
 
-    stage==="translated"&&e("div",{style:{animation:"fadeUp 0.4s ease"}},
-      e("div",{style:{...st.card,marginBottom:14}},
-        e("span",{style:st.label},"Original — English"),
-        e("div",{style:{fontSize:13,color:C.muted,lineHeight:1.75,whiteSpace:"pre-wrap"}},inputText)
-      ),
-      e("div",{style:{...st.card,border:"1px solid rgba(124,92,219,0.4)",marginBottom:16}},
+    stage==="translated"&&e("div",{style:{animation:"fadeUp 0.25s ease"}},
+      e("div",{style:{...st.card,border:`1px solid rgba(109,79,216,0.28)`,marginBottom:16}},
         e("div",{style:{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:12}},
           e("span",{style:st.label},"AI Translation — ",language),
-          e("span",{style:{fontSize:11,background:"rgba(124,92,219,0.15)",border:"1px solid rgba(124,92,219,0.25)",color:C.light,borderRadius:20,padding:"3px 10px"}},"AI draft")
+          e("span",{style:{fontSize:11,background:"rgba(109,79,216,0.08)",border:"1px solid rgba(109,79,216,0.18)",color:C.accent,borderRadius:999,padding:"3px 10px"}},"AI draft")
         ),
-        e("div",{style:{fontSize:14,lineHeight:1.8,color:C.text,whiteSpace:"pre-wrap",marginBottom:20}},aiResult),
-        e("div",{style:{display:"grid",gridTemplateColumns:"repeat(3,1fr)",gap:10,marginBottom:18}},
-          [[words,"Words"],[`$${(words*0.04).toFixed(2)}`,`Your price`],[`$${(words*0.125).toFixed(2)}`,"Agency price"]].map(([v,l],i)=>
-            e("div",{key:i,style:{background:"rgba(255,255,255,0.03)",border:`1px solid ${C.border}`,borderRadius:10,padding:"12px 14px",textAlign:"center"}},
-              e("div",{style:{fontFamily:"'Playfair Display',serif",fontSize:20,color:C.pale,marginBottom:3}},v),
-              e("div",{style:{fontSize:11,color:C.muted}},l)
+        e("div",{style:{display:"grid",gridTemplateColumns:"repeat(3,1fr)",gap:10,marginBottom:12}},
+          [
+            [words,"Words","Source word count"],
+            [formatEuro(lingoPrice),"Your price","LingoCheck price for this job"],
+            [formatEuro(agencyPrice),"Typical agency price","Average a traditional translation agency would charge for the same job. Comparison only — not editable."]
+          ].map(([v,l,hint],i)=>
+            e("div",{key:i,title:hint,style:{background:C.soft,border:`1px solid ${C.border}`,borderRadius:10,padding:"12px 14px",textAlign:"center"}},
+              e("div",{style:{fontFamily:"inherit",fontSize:20,color:C.accent,marginBottom:3}},v),
+              e("div",{style:{fontSize:11,fontWeight:600,color:C.text,display:"flex",alignItems:"center",justifyContent:"center",gap:4}},
+                l,
+                i===2&&e("span",{"aria-label":hint,title:hint,style:{display:"inline-flex",alignItems:"center",justifyContent:"center",width:14,height:14,borderRadius:"50%",border:`1px solid ${C.border}`,fontSize:9,fontWeight:700,color:C.muted,lineHeight:1,cursor:"help"}},"i")
+              ),
+              e("div",{style:{fontSize:10,color:C.muted,marginTop:4,lineHeight:1.35}},i===2?"Comparison only":"\u00a0")
             )
           )
         ),
+        e("div",{role:"status",style:{background:C.greenBg,border:`1px solid ${C.greenBorder}`,borderRadius:10,padding:"14px 16px",marginBottom:16,textAlign:"center"}},
+          e("div",{style:{fontFamily:"inherit",fontSize:isWide?22:18,fontWeight:600,color:C.green,lineHeight:1.3}},"Save ",formatEuro(savings)," with LingoCheck!"),
+          e("div",{style:{fontSize:11,color:C.muted,marginTop:4}},"Versus the typical agency rate for this job")
+        ),
         e("div",{style:{background:C.amberBg,border:`1px solid ${C.amberBorder}`,borderRadius:10,padding:"12px 16px",marginBottom:16,fontSize:12,color:C.amber}},"✦  This is an AI draft. Once you approve, our revisor will check and refine every word."),
-        e("button",{onClick:handleSend,style:{...st.btn,width:"100%",padding:16,background:"linear-gradient(135deg,#1a6b3a,#2ea05a)",fontSize:15,color:C.white}},
-          "✓ Approve & Send to Revisor  ·  ",e("span",{style:{opacity:0.7,fontSize:12}},"demo: skip payment")
-        )
+        e("label",{style:{...st.label,marginBottom:8}},"Email for delivery"),
+        e("input",{type:"email",autoComplete:"email",placeholder:"you@example.com",value:clientEmail,onChange:ev=>setClientEmail(ev.target.value),style:{...st.ta,minHeight:0,resize:"none",marginBottom:8,padding:"10px 14px"}}),
+        e("div",{style:{fontSize:12,color:C.muted,marginBottom:16,lineHeight:1.5}},"We’ll send the reviewed file to this address when it’s ready."),
+        e("button",{onClick:handleSend,style:{...st.btn,width:"100%",padding:14,background:C.green,fontSize:15,color:C.white}},
+          "✓ Approve & Send to Revisor  ·  ",e("span",{style:{opacity:0.8,fontSize:12}},"demo: skip payment")
+        ),
+        error&&e("div",{style:{fontSize:12,color:C.error,marginTop:12}},error)
+      ),
+      e("div",{style:{...st.card,marginBottom:14}},
+        e("div",{style:{display:"flex",alignItems:"center",justifyContent:"space-between",gap:10,marginBottom:showFullDraft?12:0}},
+          e("span",{style:{...st.label,marginBottom:0}},"Document text"),
+          e("button",{onClick:()=>setShowFullDraft(v=>!v),style:{...st.btn,background:"transparent",border:`1px solid ${C.border}`,color:C.muted,padding:"6px 12px",fontSize:12}},showFullDraft?"Hide text":"Show original and translation")
+        ),
+        showFullDraft
+          ?e("div",{style:{display:"grid",gridTemplateColumns:isWide?"1fr 1fr":"1fr",gap:14}},
+            e("div",null,
+              e("div",{style:{fontSize:11,color:C.muted,letterSpacing:"1px",textTransform:"uppercase",marginBottom:8}},"Original — English"),
+              e("div",{style:{fontSize:13,color:C.muted,lineHeight:1.75,whiteSpace:"pre-wrap",maxHeight:280,overflow:"auto",padding:12,border:`1px solid ${C.border}`,borderRadius:10,background:C.soft}},inputText)
+            ),
+            e("div",null,
+              e("div",{style:{fontSize:11,color:C.accent,letterSpacing:"1px",textTransform:"uppercase",marginBottom:8}},"AI translation — ",language),
+              e("div",{style:{fontSize:13,color:C.text,lineHeight:1.75,whiteSpace:"pre-wrap",maxHeight:280,overflow:"auto",padding:12,border:`1px solid ${C.border}`,borderRadius:10,background:C.soft}},aiResult)
+            )
+          )
+          :e("div",{style:{fontSize:12,color:C.muted,lineHeight:1.55,marginTop:10}},sourceFile?.name?("Uploaded "+sourceFile.name+" · "+words+" words. Open only if you want to read the draft."):(words+" words ready for review. Open only if you want to read the draft."))
       ),
       e("button",{onClick:handleReset,style:{...st.btn,background:"transparent",border:`1px solid ${C.border}`,color:C.muted,padding:"8px 16px",fontSize:12}},"← Start over")
     ),
 
-    stage==="sent"&&e("div",{style:{...st.card,textAlign:"center",padding:"60px 32px",border:"1px solid rgba(124,92,219,0.35)",animation:"glow 3s ease-in-out infinite, fadeUp 0.3s ease"}},
+    stage==="sent"&&e("div",{style:{...st.card,textAlign:"center",padding:"64px 32px",border:"1px solid rgba(109,79,216,0.22)",animation:"glow 2.4s ease-in-out infinite, fadeUp 0.25s ease"}},
       e("div",{style:{fontSize:42,marginBottom:18}},"👁"),
-      e("div",{style:{fontFamily:"'Playfair Display',serif",fontSize:26,color:C.white,marginBottom:10}},"Awaiting revisor"),
-      e("div",{style:{...st.muted,maxWidth:340,margin:"0 auto 28px",lineHeight:1.7}},"Your translation has been sent to our revisor. They will check and refine it — you'll be notified the moment it's ready."),
+      e("div",{style:{fontFamily:"inherit",fontSize:26,color:C.text,marginBottom:10}},currentJob?.qaOnly?"Awaiting quality check":"Awaiting revisor"),
+      e("div",{style:{...st.muted,maxWidth:380,margin:"0 auto 28px",lineHeight:1.7}},
+        currentJob?.qaOnly
+          ?"Your translation has been sent to a certified translator for proofreading."
+          :"Your translation has been sent to our revisor. They will check and refine it.",
+        " We’ll email ",
+        e("strong",{style:{color:C.text}},currentJob?.clientEmailMasked||"you"),
+        " when it’s ready — you can close this page."
+      ),
       e("div",{style:{display:"flex",alignItems:"center",justifyContent:"center",gap:8,color:C.muted,fontSize:12}},
-        e("span",{style:{width:7,height:7,borderRadius:"50%",background:C.light,display:"inline-block",animation:"pulse 1.5s ease-in-out infinite"}}),
-        "Checking for updates every 2 seconds…"
+        e("span",{style:{width:7,height:7,borderRadius:"50%",background:C.accent,display:"inline-block",animation:"pulse 1.5s ease-in-out infinite"}}),
+        "Checking for updates every few seconds…"
       )
     ),
 
-    stage==="complete"&&currentJob&&e("div",{style:{animation:"fadeUp 0.5s ease"}},
+    stage==="complete"&&currentJob&&e("div",{style:{animation:"fadeUp 0.25s ease"}},
       e("div",{style:{background:C.greenBg,border:`1px solid ${C.greenBorder}`,borderRadius:14,padding:"14px 20px",marginBottom:18,display:"flex",alignItems:"center",gap:10}},
         e("span",{style:{fontSize:20}},"✅"),
         e("div",null,
           e("div",{style:{fontSize:13,fontWeight:500,color:C.green}},"Revisor review complete"),
-          e("div",{style:{fontSize:12,color:C.muted}},"Your translation has been human-verified and is ready to use")
+          e("div",{style:{fontSize:12,color:C.muted}},
+            currentJob.clientEmailMasked
+              ?"Your translation has been human-verified. We also emailed it to "+currentJob.clientEmailMasked+"."
+              :"Your translation has been human-verified and is ready to use"
+          )
         )
       ),
       e("div",{style:{...st.card,border:`1px solid ${C.greenBorder}`,marginBottom:14}},
@@ -210,97 +1070,20 @@ function ClientView({allJobs,myJobs,clientId,createJob,updateJob,onGoRevisor}){
           e("span",{style:{fontSize:11,background:C.greenBg,border:`1px solid ${C.greenBorder}`,color:C.green,borderRadius:20,padding:"3px 10px"}},"✓ Human reviewed")
         ),
         e("div",{style:{fontSize:14,lineHeight:1.8,color:C.text,whiteSpace:"pre-wrap",marginBottom:18}},currentJob.revisedTranslation),
-        e("button",{onClick:()=>navigator.clipboard.writeText(currentJob.revisedTranslation),style:{...st.btn,background:"transparent",border:`1px solid ${C.border}`,color:C.muted,padding:"8px 16px",fontSize:12}},"Copy translation")
+        e("div",{style:{display:"flex",gap:10,flexWrap:"wrap"}},
+          e("button",{onClick:()=>navigator.clipboard.writeText(currentJob.revisedTranslation),style:{...st.btn,background:"transparent",border:`1px solid ${C.border}`,color:C.muted,padding:"8px 16px",fontSize:12}},"Copy translation"),
+          e("button",{onClick:async()=>{
+            try{ await downloadTranslated(); }
+            catch(err){ setError("Could not download file: "+(err.message||"Unknown error")); }
+          },style:{...st.btn,background:C.soft,border:`1px solid ${C.border}`,color:C.muted,padding:"8px 16px",fontSize:12}},"Download translated file")
+        ),
+        error&&e("div",{style:{fontSize:12,color:C.error,marginTop:12}},error)
       ),
       e("button",{onClick:handleReset,style:{...st.btn,background:"transparent",border:`1px solid ${C.border}`,color:C.muted,padding:"8px 16px",fontSize:12}},"← Translate another document")
     ),
 
-    e("div",{style:{textAlign:"center",marginTop:44,fontSize:10,color:"rgba(160,148,200,0.25)",letterSpacing:"0.5px"}},"LINGOCHECK · AI + HUMAN TRANSLATION · INVESTOR DEMO")
-  );
-}
-
-// ══════════════════════════════════════════════════════
-// REVISOR VIEW
-// ══════════════════════════════════════════════════════
-function RevisorView({pendingJobs,allJobs,updateJob,onGoClient}){
-  const[selectedId,setSelectedId]=useState(null);
-  const[editedText,setEditedText]=useState("");
-  const[sending,setSending]=useState(false);
-  const[lastSent,setLastSent]=useState(false);
-
-  useEffect(()=>{
-    if(pendingJobs.length===0){setSelectedId(null);return;}
-    const newest=pendingJobs[pendingJobs.length-1];
-    if(!selectedId||!pendingJobs.find(j=>j.id===selectedId)){setSelectedId(newest.id);setEditedText(newest.aiTranslation);}
-  },[pendingJobs]);
-
-  const selectedJob=allJobs.find(j=>j.id===selectedId);
-
-  function select(job){setSelectedId(job.id);setEditedText(job.aiTranslation);}
-
-  async function handleSend(){
-    if(!selectedJob||!editedText.trim())return;
-    setSending(true);
-    await updateJob(selectedId,{status:"complete",revisedTranslation:editedText.trim()});
-    setLastSent(true);setSelectedId(null);setSending(false);
-  }
-
-  const timeAgo=ts=>{const s=Math.floor((Date.now()-ts)/1000);if(s<60)return s+"s ago";return Math.floor(s/60)+"m ago";};
-  const e=React.createElement;
-
-  return e("div",{style:{maxWidth:880,margin:"0 auto",padding:"0 20px"}},
-    e("div",{style:{display:"flex",alignItems:"center",justifyContent:"space-between",padding:"24px 0 32px",borderBottom:`1px solid ${C.border}`,marginBottom:32}},
-      e("div",null,
-        e("div",{style:{fontFamily:"'Playfair Display',serif",fontSize:24,fontWeight:600,color:C.white}},"Lingo",e("span",{style:{color:C.light}},"Check")),
-        e("div",{style:{fontSize:12,color:C.muted,marginTop:2}},"Revisor Panel")
-      ),
-      e("div",{style:{display:"flex",alignItems:"center",gap:10}},
-        pendingJobs.length>0&&e("span",{style:{fontSize:11,fontWeight:500,background:"rgba(230,100,100,0.12)",border:"1px solid rgba(230,100,100,0.25)",color:"#f09090",borderRadius:20,padding:"5px 12px"}},pendingJobs.length," pending"),
-        e("button",{onClick:onGoClient,style:{...st.btn,background:"rgba(255,255,255,0.04)",border:`1px solid ${C.border}`,color:C.muted,fontSize:12,padding:"6px 14px"}},"← Client View")
-      )
-    ),
-
-    lastSent&&pendingJobs.length===0&&e("div",{style:{background:C.greenBg,border:`1px solid ${C.greenBorder}`,borderRadius:12,padding:"14px 20px",marginBottom:20,fontSize:13,color:C.green,animation:"fadeUp 0.3s ease"}},"✅  Translation sent to client successfully."),
-
-    pendingJobs.length===0&&e("div",{style:{textAlign:"center",padding:"80px 0"}},
-      e("div",{style:{fontSize:40,marginBottom:18}},"✓"),
-      e("div",{style:{fontFamily:"'Playfair Display',serif",fontSize:24,color:C.white,marginBottom:8}},"No pending reviews"),
-      e("div",{style:st.muted},"New requests will appear here automatically"),
-      e("div",{style:{display:"flex",alignItems:"center",justifyContent:"center",gap:8,marginTop:18,fontSize:11,color:"rgba(160,148,200,0.3)"}},
-        e("span",{style:{width:6,height:6,borderRadius:"50%",background:C.light,display:"inline-block",animation:"pulse 1.5s ease-in-out infinite"}}),
-        "Listening for new requests…"
-      )
-    ),
-
-    pendingJobs.length>0&&e("div",{style:{display:"grid",gridTemplateColumns:selectedJob?"240px 1fr":"1fr",gap:16,alignItems:"start"}},
-      e("div",null,
-        e("span",{style:st.label},"Incoming requests"),
-        pendingJobs.map(job=>e("div",{key:job.id,onClick:()=>select(job),style:{...st.card,padding:16,marginBottom:8,cursor:"pointer",border:`1px solid ${selectedId===job.id?"rgba(124,92,219,0.55)":C.border}`,background:selectedId===job.id?"rgba(124,92,219,0.14)":C.card,transition:"all 0.2s",animation:"fadeUp 0.3s ease"}},
-          e("div",{style:{fontSize:13,fontWeight:500,color:C.text,marginBottom:5}},"EN → ",job.language),
-          e("div",{style:{fontSize:12,color:C.muted,marginBottom:6,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}},job.originalText.substring(0,44),"…"),
-          e("div",{style:{fontSize:11,color:"rgba(160,148,200,0.4)"}},timeAgo(job.createdAt))
-        ))
-      ),
-      selectedJob&&e("div",{style:{animation:"fadeUp 0.3s ease"}},
-        e("span",{style:st.label},"Review & edit translation"),
-        e("div",{style:{...st.card,marginBottom:14}},
-          e("div",{style:{fontSize:11,letterSpacing:"1px",textTransform:"uppercase",color:C.muted,marginBottom:8}},"Original — English"),
-          e("div",{style:{fontSize:13,color:C.muted,lineHeight:1.75,whiteSpace:"pre-wrap"}},selectedJob.originalText)
-        ),
-        e("div",{style:{...st.card,border:"1px solid rgba(124,92,219,0.35)",marginBottom:14}},
-          e("div",{style:{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:10}},
-            e("div",{style:{fontSize:11,letterSpacing:"1px",textTransform:"uppercase",color:C.light}},"AI Translation — ",selectedJob.language),
-            e("div",{style:{fontSize:11,color:C.muted}},"Edit freely below")
-          ),
-          e("textarea",{style:{...st.ta,minHeight:200},value:editedText,onChange:ev=>setEditedText(ev.target.value)})
-        ),
-        e("div",{style:{background:C.amberBg,border:`1px solid ${C.amberBorder}`,borderRadius:10,padding:"11px 14px",marginBottom:14,fontSize:12,color:C.amber}},"✦  Make any corrections, then send to the client."),
-        e("button",{onClick:handleSend,disabled:sending,style:{...st.btn,width:"100%",padding:16,background:"linear-gradient(135deg,#1a6b3a,#2ea05a)",fontSize:15,color:C.white,display:"flex",alignItems:"center",justifyContent:"center",gap:8}},
-          sending?e(React.Fragment,null,e(Spinner,{size:14})," Sending…"):"✓ Send to Client"
-        )
-      )
-    )
-  );
+    e("div",{style:{textAlign:"center",marginTop:56,fontSize:10,color:"#b0a9c0",letterSpacing:"0.5px"}},"LINGOCHECK · AI + HUMAN TRANSLATION · INVESTOR DEMO")
+  ));
 }
 
 ReactDOM.createRoot(document.getElementById("root")).render(React.createElement(App));
