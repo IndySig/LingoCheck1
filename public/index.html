@@ -275,20 +275,33 @@ function collectDocxParagraphTexts(xmlStr){
 }
 
 function alignTranslatedParagraphs(translated, originalTexts){
-  const originals = (originalTexts||[]).filter(Boolean);
+  var originals = (originalTexts||[]).filter(Boolean);
   if(!originals.length) return [String(translated||"").trim()];
-  const parts = String(translated||"").split(/\n{2,}/g).map(s=>s.trim()).filter(Boolean);
-  if(parts.length === originals.length) return parts;
-  if(parts.length > 1 && Math.abs(parts.length - originals.length) <= 1){
-    if(parts.length < originals.length){
-      while(parts.length < originals.length) parts.push("");
-      return parts;
-    }
-    const head = parts.slice(0, originals.length-1);
-    return [...head, parts.slice(originals.length-1).join(" ")];
+  var n = originals.length;
+  var text = String(translated||"").trim();
+  if(!text) return Array.from({length:n}, function(){ return ""; });
+
+  // Try splitting on double-newline (paragraphs)
+  var parts = text.split(/\n{2,}/).map(function(s){ return s.trim(); }).filter(Boolean);
+
+  // Try splitting on single newlines if closer to n
+  if(Math.abs(parts.length - n) > Math.abs(text.split(/\n/).filter(function(s){ return s.trim(); }).length - n)){
+    var byLine = text.split(/\n/).map(function(s){ return s.trim(); }).filter(Boolean);
+    if(byLine.length >= n) parts = byLine;
   }
-  const weights = originals.map(s=>Math.max(1, String(s).replace(/\s+/g,"").length));
-  return splitTextByWeights(String(translated||"").replace(/\n+/g," "), weights);
+
+  if(parts.length === n) return parts;
+
+  // If we have more parts than slots, merge extras into last slot
+  if(parts.length > n){
+    var head = parts.slice(0, n-1);
+    head.push(parts.slice(n-1).join(" "));
+    return head;
+  }
+
+  // If fewer parts than slots: distribute proportionally by original char length
+  var weights = originals.map(function(s){ return Math.max(1, String(s).replace(/\s+/g,"").length); });
+  return splitTextByWeights(text.replace(/\n+/g," "), weights);
 }
 
 function replaceDocxParagraphTexts(xmlStr, newTexts){
@@ -314,15 +327,15 @@ function replaceDocxParagraphTexts(xmlStr, newTexts){
 
 async function makeStyledDocxBlobFromTemplate(templateDocxB64, translatedText){
   if(!window.JSZip) throw new Error("DOCX support not loaded");
-  const bytes = base64ToUint8Array(templateDocxB64);
-  const zip = await JSZip.loadAsync(bytes);
-  const docFile = zip.file("word/document.xml");
+  var bytes = base64ToUint8Array(templateDocxB64);
+  var zip = await JSZip.loadAsync(bytes);
+  var docFile = zip.file("word/document.xml");
   if(!docFile) throw new Error("DOCX template missing document.xml");
-  const xmlStr = await docFile.async("string");
-  const originals = collectDocxParagraphTexts(xmlStr);
-  const slots = alignTranslatedParagraphs(translatedText, originals);
+  var xmlStr = await docFile.async("string");
+  var originals = collectDocxParagraphTexts(xmlStr);
+  var slots = alignTranslatedParagraphs(translatedText, originals);
   zip.file("word/document.xml", replaceDocxParagraphTexts(xmlStr, slots));
-  const out = await zip.generateAsync({ type:"uint8array" });
+  var out = await zip.generateAsync({ type:"uint8array", compression:"DEFLATE", compressionOptions:{ level:6 } });
   return new Blob([out], { type: "application/vnd.openxmlformats-officedocument.wordprocessingml.document" });
 }
 
@@ -369,100 +382,147 @@ function splitTextByWeights(text, weights){
 }
 
 function groupPdfLines(items){
-  if(!items.length) return [];
-  const sorted = items.slice().sort((a,b)=>(b.y-a.y)||(a.x-b.x));
-  const lines = [];
-  for(const it of sorted){
-    const last = lines[lines.length-1];
-    const tol = Math.max(2, (it.fontSize||11)*0.35);
-    if(last && Math.abs(last.y-it.y)<=tol) last.items.push(it);
-    else lines.push({ y: it.y, items:[it] });
+  if(!items||!items.length) return [];
+  // Sort top-to-bottom, left-to-right
+  var sorted = items.slice().sort(function(a,b){ return (b.y-a.y)||(a.x-b.x); });
+
+  // First pass: group into visual lines (items with similar y)
+  var lines = [];
+  for(var i=0;i<sorted.length;i++){
+    var it = sorted[i];
+    var last = lines[lines.length-1];
+    var tol = Math.max(2, (it.fontSize||11)*0.45);
+    if(last && Math.abs(last.avgY - it.y) <= tol){
+      last.items.push(it);
+      last.avgY = last.items.reduce(function(s,x){ return s+x.y; },0)/last.items.length;
+    } else {
+      lines.push({ avgY: it.y, items:[it] });
+    }
   }
-  return lines.map(line=>{
-    const its = line.items.slice().sort((a,b)=>a.x-b.x);
-    const fontSize = its.reduce((s,i)=>s+i.fontSize,0)/its.length;
+
+  // Convert lines to normalised line objects
+  var normLines = lines.map(function(line){
+    var its = line.items.slice().sort(function(a,b){ return a.x-b.x; });
+    var fontSize = its.reduce(function(s,i){ return s+i.fontSize; },0)/its.length;
     return {
-      x: Math.min(...its.map(i=>i.x)),
-      y: Math.min(...its.map(i=>i.y)),
-      x2: Math.max(...its.map(i=>i.x+i.width)),
-      y2: Math.max(...its.map(i=>i.y+(i.height||i.fontSize))),
-      fontSize,
-      text: its.map(i=>i.str).join(" ")
+      x: Math.min.apply(null, its.map(function(i){ return i.x; })),
+      y: Math.min.apply(null, its.map(function(i){ return i.y; })),
+      x2: Math.max.apply(null, its.map(function(i){ return i.x+(i.width||0); })),
+      y2: Math.max.apply(null, its.map(function(i){ return i.y+(i.height||i.fontSize); })),
+      fontSize: fontSize,
+      text: its.map(function(i){ return i.str; }).join(" ").trim()
     };
-  });
+  }).filter(function(l){ return l.text; });
+
+  // Second pass: cluster lines into paragraph blocks.
+  // Lines are in the same block when the vertical gap is <= 1.5x the line height.
+  var blocks = [];
+  for(var j=0;j<normLines.length;j++){
+    var ln = normLines[j];
+    var prev = blocks[blocks.length-1];
+    var lineH = ln.fontSize * 1.4;
+    if(prev){
+      var gap = prev.y - ln.y; // y decreases downward in PDF coords
+      if(gap > 0 && gap <= lineH * 1.8){
+        prev.lines.push(ln);
+        prev.y = ln.y;
+        prev.x = Math.min(prev.x, ln.x);
+        prev.x2 = Math.max(prev.x2, ln.x2);
+        prev.y2 = Math.max(prev.y2, ln.y2);
+        prev.text += " " + ln.text;
+        continue;
+      }
+    }
+    blocks.push({
+      x: ln.x, y: ln.y2, x2: ln.x2, y2: ln.y2,
+      topY: ln.y2,  // topmost y (highest on page = largest y in PDF)
+      fontSize: ln.fontSize,
+      lines: [ln],
+      text: ln.text
+    });
+  }
+  return blocks;
 }
 
-function drawPdfLineText(page, font, text, line){
-  const safe = winAnsiSafe(text);
+function drawPdfLineText(page, font, text, block){
+  var safe = winAnsiSafe(text);
+  // White-out the entire original block area
+  var pad = 2;
+  var blockX = block.x - pad;
+  var blockY = block.y - pad;
+  var blockW = Math.max(10, block.x2 - block.x) + pad*2;
+  var blockH = Math.max(block.fontSize, block.y2 - block.y) + pad*2;
+  page.drawRectangle({ x:blockX, y:blockY, width:blockW, height:blockH, color:PDFLib.rgb(1,1,1) });
   if(!safe) return;
-  const width = Math.max(12, line.x2 - line.x);
-  let size = line.fontSize || 11;
-  while(size > 5 && font.widthOfTextAtSize(safe, size) > width) size -= 0.25;
-  const pad = Math.max(1, size * 0.12);
-  page.drawRectangle({
-    x: line.x - pad,
-    y: line.y - pad,
-    width: width + pad * 2,
-    height: Math.max(size, line.y2 - line.y) + pad * 2,
-    color: PDFLib.rgb(1,1,1)
-  });
-  if(font.widthOfTextAtSize(safe, size) <= width){
-    page.drawText(safe, { x: line.x, y: line.y, size, font, color: PDFLib.rgb(0,0,0) });
-    return;
-  }
-  const wrapped = wrapPdfLine(font, safe, size, width);
-  let y = line.y;
-  for(const ln of wrapped){
-    if(!ln) continue;
-    page.drawText(ln, { x: line.x, y, size, font, color: PDFLib.rgb(0,0,0) });
-    y -= size * 1.12;
+
+  // Draw translated text line by line within the block width, starting from top
+  var fontSize = block.fontSize || 11;
+  var maxW = Math.max(20, block.x2 - block.x);
+  var wrapped = wrapPdfLine(font, safe, fontSize, maxW);
+  // Start drawing from topY of the block (top line's baseline)
+  var startY = (block.lines && block.lines.length)
+    ? block.lines[0].y   // baseline of first original line
+    : block.topY || block.y2;
+  var y = startY;
+  for(var i=0;i<wrapped.length;i++){
+    if(!wrapped[i]) continue;
+    // Shrink font if line is still too wide
+    var sz = fontSize;
+    while(sz > 5 && font.widthOfTextAtSize(wrapped[i], sz) > maxW) sz -= 0.25;
+    page.drawText(wrapped[i], { x:block.x, y:y, size:sz, font:font, color:PDFLib.rgb(0,0,0) });
+    y -= sz * 1.25;
   }
 }
 
 async function makeStyledPdfBlobFromTemplate(templatePdfB64, translatedText){
   if(!window.pdfjsLib || !window.PDFLib) throw new Error("PDF support not loaded");
-  const bytes = base64ToUint8Array(templatePdfB64);
-  const pdfDoc = await PDFLib.PDFDocument.load(bytes);
-  const font = await pdfDoc.embedFont(PDFLib.StandardFonts.Helvetica);
-  const src = await pdfjsLib.getDocument({ data: bytes.slice(), isEvalSupported: false, disableFontFace: true }).promise;
-  const pageLayouts = [];
-  for(let i=1;i<=src.numPages;i++){
-    const page = await src.getPage(i);
-    const content = await page.getTextContent();
-    const items = [];
-    for(const it of content.items){
+  var bytes = base64ToUint8Array(templatePdfB64);
+  var pdfDoc = await PDFLib.PDFDocument.load(bytes);
+  var font = await pdfDoc.embedFont(PDFLib.StandardFonts.Helvetica);
+  var src = await pdfjsLib.getDocument({ data: bytes.slice(), isEvalSupported: false, disableFontFace: true }).promise;
+  var pageLayouts = [];
+  for(var i=1;i<=src.numPages;i++){
+    var page = await src.getPage(i);
+    var content = await page.getTextContent();
+    var items = [];
+    for(var k=0;k<content.items.length;k++){
+      var it = content.items[k];
       if(!it.str || !String(it.str).trim()) continue;
-      const t = it.transform || [1,0,0,1,0,0];
-      const fontSize = Math.max(5, Math.min(72, Math.hypot(t[0], t[1]) || 11));
+      var t = it.transform || [1,0,0,1,0,0];
+      var fontSize = Math.max(5, Math.min(72, Math.hypot(t[0],t[1]) || 11));
       items.push({
         str: it.str,
-        x: t[4],
-        y: t[5],
+        x: t[4], y: t[5],
         width: it.width || fontSize * String(it.str).length * 0.5,
         height: it.height || fontSize,
-        fontSize
+        fontSize: fontSize
       });
     }
-    const lines = groupPdfLines(items);
+    var blocks = groupPdfLines(items);
     pageLayouts.push({
-      lines,
-      text: lines.map(l=>l.text).join(" ")
+      blocks: blocks,
+      text: blocks.map(function(b){ return b.text; }).join(" ")
     });
   }
-  if(!pageLayouts.some(p=>p.lines.length)){
+  if(!pageLayouts.some(function(p){ return p.blocks.length; })){
     throw new Error("Could not read the original PDF layout");
   }
-  const pageWeights = pageLayouts.map(p=>Math.max(1, String(p.text||"").replace(/\s+/g,"").length));
-  const pageChunks = splitTextByWeights(translatedText, pageWeights);
-  const pages = pdfDoc.getPages();
-  pageLayouts.forEach((layout, pageIndex)=>{
-    const page = pages[pageIndex];
-    if(!page || !layout.lines.length) return;
-    const lineWeights = layout.lines.map(l=>Math.max(1, String(l.text||"").replace(/\s+/g,"").length));
-    const lineChunks = splitTextByWeights(pageChunks[pageIndex] || "", lineWeights);
-    layout.lines.forEach((line, i)=>drawPdfLineText(page, font, lineChunks[i] || "", line));
+  // Distribute translated text across pages proportional to original text length
+  var pageWeights = pageLayouts.map(function(p){ return Math.max(1, String(p.text||"").replace(/\s+/g,"").length); });
+  var pageChunks = splitTextByWeights(translatedText, pageWeights);
+  var pages = pdfDoc.getPages();
+  pageLayouts.forEach(function(layout, pageIndex){
+    var page = pages[pageIndex];
+    if(!page || !layout.blocks.length) return;
+    var pageText = pageChunks[pageIndex] || "";
+    // Distribute translated text across blocks proportional to original block text length
+    var blockWeights = layout.blocks.map(function(b){ return Math.max(1, String(b.text||"").replace(/\s+/g,"").length); });
+    var blockChunks = splitTextByWeights(pageText, blockWeights);
+    layout.blocks.forEach(function(block, bi){
+      drawPdfLineText(page, font, blockChunks[bi] || "", block);
+    });
   });
-  const out = await pdfDoc.save();
+  var out = await pdfDoc.save();
   return new Blob([out], { type: "application/pdf" });
 }
 
