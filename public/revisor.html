@@ -92,43 +92,36 @@ function alignTranslationToOriginalSentences(origSentences, translationText){
   if(!t) return Array.from({length:n}, ()=>"");
 
   const transSentences = splitSentences(t);
-  if(transSentences.length === n) return transSentences;
 
+  // If we have at least as many translation sentences as original, assign 1:1
+  // and only merge leftovers into the last slot — never collapse multiple
+  // originals into one cell.
+  if(transSentences.length >= n){
+    const out = transSentences.slice(0, n - 1);
+    out.push(transSentences.slice(n - 1).join(" "));
+    return out;
+  }
+
+  // Fewer translation sentences than originals: distribute by proportional length,
+  // but never assign more than 1 translation sentence per original slot (leave
+  // excess slots empty rather than merging).
   const origLens = orig.map(s => Math.max(1, String(s||"").replace(/\s+/g," ").trim().length));
   const totalOrig = origLens.reduce((a,b)=>a+b,0);
   const transLens = transSentences.map(s => Math.max(1, String(s||"").length));
   const totalTrans = transLens.reduce((a,b)=>a+b,0);
 
-  const out = [];
+  const out = Array(n).fill("");
   let j = 0;
-  for(let i=0;i<n;i++){
-    const remainingSlots = n - i;
-    const remainingSentences = transSentences.length - j;
-    if(remainingSentences <= 0){
-      out.push("");
-      continue;
-    }
-
-    const mustLeave = Math.max(0, remainingSlots - 1);
-    const maxTake = Math.max(1, remainingSentences - mustLeave);
-
-    if(i === n-1){
-      out.push(transSentences.slice(j).join(" "));
-      break;
-    }
-
-    const target = (origLens[i] / totalOrig) * totalTrans;
-    let acc = 0;
-    let take = 0;
-    while(take < maxTake && j + take < transSentences.length){
-      acc += transLens[j + take];
-      take++;
-      if(acc >= target && (transSentences.length - (j + take)) >= mustLeave) break;
-    }
-    out.push(transSentences.slice(j, j + take).join(" "));
-    j += take;
+  let cumOrig = 0;
+  for(let i = 0; i < n && j < transSentences.length; i++){
+    cumOrig += origLens[i];
+    const threshold = (cumOrig / totalOrig) * transSentences.length;
+    // Assign one sentence per slot; advance j when the proportional threshold is met
+    out[i] = transSentences[j];
+    if(j + 1 < transSentences.length && threshold >= j + 1.5) j++;
+    else j++;
   }
-  return out.length === n ? out : Array.from({length:n}, (_,i)=>out[i]||"");
+  return out;
 }
 
 function fmtEur(cents){

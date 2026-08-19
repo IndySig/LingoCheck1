@@ -645,8 +645,13 @@ function ClientView({clientId}){
         if(saved?.id){
           const job=await apiFetch("/api/jobs/"+encodeURIComponent(saved.id)+"?clientId="+encodeURIComponent(clientId));
           if(cancelled||!job) return;
+          // Don't restore completed jobs on page reload — client has already seen it
+          if(job.status==="complete"){
+            try{ localStorage.removeItem("lc_open_job"); }catch{}
+            return;
+          }
           setCurrentJob(job);
-          setStage(job.status==="complete"?"complete":"sent");
+          setStage("sent");
         }
       }catch{}
     }
