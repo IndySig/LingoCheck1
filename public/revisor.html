@@ -58,37 +58,92 @@ async function apiFetch(path,opts={}){const r=await fetch(path,{headers:{"Conten
 
 function Spinner({size=18}){return React.createElement("span",{style:{display:"inline-block",width:size,height:size,border:"2px solid rgba(109,79,216,0.18)",borderTopColor:C.accent,borderRadius:"50%",animation:"spin 0.55s linear infinite",verticalAlign:"middle"}});}
 
+function splitKeepPrefix(text, re){
+  const parts = [];
+  let last = 0;
+  let m;
+  const r = new RegExp(re.source, re.flags.includes("g") ? re.flags : re.flags + "g");
+  while((m = r.exec(text)) !== null){
+    const end = m.index + (m[1] ? m[1].length : 0);
+    if(end > last){
+      const piece = text.slice(last, end).trim();
+      if(piece) parts.push(piece);
+    }
+    last = m.index + m[0].length;
+  }
+  const tail = text.slice(last).trim();
+  if(tail) parts.push(tail);
+  return parts.length ? parts : [String(text||"").trim()].filter(Boolean);
+}
+
+function splitBefore(text, re){
+  const parts = [];
+  let last = 0;
+  let m;
+  const r = new RegExp(re.source, re.flags.includes("g") ? re.flags : re.flags + "g");
+  while((m = r.exec(text)) !== null){
+    const piece = text.slice(last, m.index).trim();
+    if(piece) parts.push(piece);
+    last = m.index + m[0].length;
+  }
+  const tail = text.slice(last).trim();
+  if(tail) parts.push(tail);
+  return parts.length ? parts : [String(text||"").trim()].filter(Boolean);
+}
+
+function splitSingleLineUnits(text){
+  let units = [String(text||"").replace(/\s+/g," ").trim()];
+  if(!units[0]) return [];
+
+  units = units.flatMap(u => splitKeepPrefix(u, /([.!?]["')\]]*)\s+(?=[A-Z\u00C0-\u024F\u0400-\u04FF])/g));
+  units = units.flatMap(u => splitKeepPrefix(u, /(\b[A-Z]{2,})\s+(?=[A-Z][a-z])/g));
+  units = units.flatMap(u => splitBefore(u, /\s+(?=\d+(?:\.\d+)+\s+[A-Z])/g));
+  units = units.flatMap(u => splitKeepPrefix(u, /([a-z0-9,])(\s+)(?=[A-Z][a-z]{2,})/g));
+
+  return units.map(s => s.trim()).filter(Boolean);
+}
+
 function splitSentences(text){
   var raw=(text||"").trim();
   if(!raw) return [];
-  // Split on newlines first: each non-empty line is its own unit.
-  // Handles numbered lists ("1. Question?") without merging them.
+
   var lines=raw.split(/\r?\n/).map(function(l){return l.trim();}).filter(Boolean);
   if(lines.length>1){
     var out=[];
     for(var li=0;li<lines.length;li++){
       var line=lines[li];
-      var isNumbered=/^\s*\d+[.)\]]\s/.test(line);
-      if(isNumbered){ out.push(line); }
-      else{ var ss=splitSentences(line); for(var si=0;si<ss.length;si++) out.push(ss[si]); }
+      var isNumbered=/^\s*\d+[\.\)\]]\s/.test(line);
+      var isSection=/^\s*\d+(?:\.\d+)+\s+[A-Z]/.test(line);
+      if(isNumbered || isSection){ out.push(line); }
+      else{
+        var ss=splitSingleLineUnits(line);
+        for(var si=0;si<ss.length;si++) out.push(ss[si]);
+      }
     }
     return out;
   }
-  // Single line: split on .  !  ? followed by space + uppercase letter.
-  var t=raw.replace(/\s+/g," ");
-  var out=[];
-  var re=/([.!?]["')\]]*) +(?=[A-Z\u00C0-\u024F\u0400-\u04FF])/g;
-  var last=0,m;
-  while((m=re.exec(t))!==null){
-    // Skip abbreviations: single uppercase letter before the dot
-    var before=t.slice(0,m.index);
-    if(/\b[A-Z]$/.test(before)) continue;
-    out.push(t.slice(last,m.index+m[1].length).trim());
-    last=m.index+m[0].length;
+
+  var units=splitSingleLineUnits(raw.replace(/\s+/g," "));
+  return units.length ? units : [raw];
+}
+
+function splitTextByWeights(text, weights){
+  const words = String(text||"").split(/\s+/).filter(Boolean);
+  if(!weights.length) return [words.join(" ")];
+  const total = weights.reduce((a,b)=>a+b,0) || 1;
+  const result = [];
+  let idx = 0;
+  for(let i=0;i<weights.length;i++){
+    const take = i === weights.length - 1
+      ? words.length - idx
+      : Math.max(0, Math.round(words.length * (weights[i] / total)));
+    result.push(words.slice(idx, idx + take).join(" "));
+    idx += take;
   }
-  out.push(t.slice(last).trim());
-  var result=out.filter(Boolean);
-  return result.length?result:[t];
+  if(idx < words.length && result.length){
+    result[result.length - 1] = [result[result.length - 1], words.slice(idx).join(" ")].filter(Boolean).join(" ");
+  }
+  return result;
 }
 
 function alignTranslationToOriginalSentences(origSentences, translationText){
@@ -99,36 +154,31 @@ function alignTranslationToOriginalSentences(origSentences, translationText){
   if(!t) return Array.from({length:n}, ()=>"");
 
   const transSentences = splitSentences(t);
+  if(transSentences.length === n) return transSentences;
 
-  // If we have at least as many translation sentences as original, assign 1:1
-  // and only merge leftovers into the last slot — never collapse multiple
-  // originals into one cell.
-  if(transSentences.length >= n){
-    const out = transSentences.slice(0, n - 1);
-    out.push(transSentences.slice(n - 1).join(" "));
+  const weights = orig.map(s => Math.max(1, String(s||"").replace(/\s+/g," ").trim().length));
+
+  if(transSentences.length > n){
+    const out = [];
+    let j = 0;
+    const m = transSentences.length;
+    for(let i=0;i<n;i++){
+      if(i === n - 1){
+        out.push(transSentences.slice(j).join(" "));
+        break;
+      }
+      const remaining = m - j;
+      const slotsLeft = n - i;
+      const weightLeft = weights.slice(i).reduce((a,b)=>a+b,0) || 1;
+      let take = Math.max(1, Math.round(remaining * (weights[i] / weightLeft)));
+      take = Math.min(take, remaining - (slotsLeft - 1));
+      out.push(transSentences.slice(j, j + take).join(" "));
+      j += take;
+    }
     return out;
   }
 
-  // Fewer translation sentences than originals: distribute by proportional length,
-  // but never assign more than 1 translation sentence per original slot (leave
-  // excess slots empty rather than merging).
-  const origLens = orig.map(s => Math.max(1, String(s||"").replace(/\s+/g," ").trim().length));
-  const totalOrig = origLens.reduce((a,b)=>a+b,0);
-  const transLens = transSentences.map(s => Math.max(1, String(s||"").length));
-  const totalTrans = transLens.reduce((a,b)=>a+b,0);
-
-  const out = Array(n).fill("");
-  let j = 0;
-  let cumOrig = 0;
-  for(let i = 0; i < n && j < transSentences.length; i++){
-    cumOrig += origLens[i];
-    const threshold = (cumOrig / totalOrig) * transSentences.length;
-    // Assign one sentence per slot; advance j when the proportional threshold is met
-    out[i] = transSentences[j];
-    if(j + 1 < transSentences.length && threshold >= j + 1.5) j++;
-    else j++;
-  }
-  return out;
+  return splitTextByWeights(t, weights);
 }
 
 function fmtEur(cents){
