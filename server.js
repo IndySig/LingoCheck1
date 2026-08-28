@@ -1142,9 +1142,16 @@ const PORT = process.env.PORT || 5000;
 server.listen(PORT, '0.0.0.0', () => {
   ensureAuthConfig();
   const smtp = loadSmtpConfig();
+  const resendKey = String(process.env.RESEND_API_KEY || readAuthFile().RESEND_API_KEY || '').trim();
+  const smtpFrom = String(process.env.SMTP_FROM || readAuthFile().SMTP_FROM || '').trim();
   console.log(`LingoCheck running on port ${PORT}`);
-  if (smtp.host) console.log(`[LingoCheck] Email sending ready via ${smtp.host} as ${smtp.user}`);
-  else console.log(`[LingoCheck] Email sending not configured (missing ${smtp.missing.join(', ')} in auth.local.json)`);
+  if (resendKey) {
+    console.log(`[LingoCheck] Email sending ready via Resend${smtpFrom ? ` (from ${smtpFrom})` : ''}`);
+  } else if (smtp.host) {
+    console.log(`[LingoCheck] Email sending ready via ${smtp.host} as ${smtp.user}`);
+  } else {
+    console.log(`[LingoCheck] Email sending not configured — set RESEND_API_KEY or SMTP_* env vars`);
+  }
   const turnstile = security.loadTurnstileConfig(readAuthFile);
   if (turnstile.enabled) console.log('[LingoCheck] Cloudflare Turnstile bot check enabled');
   else console.log('[LingoCheck] Cloudflare Turnstile not configured — using challenge token + honeypot. Add TURNSTILE_SITE_KEY and TURNSTILE_SECRET_KEY to auth.local.json for production.');
