@@ -223,6 +223,46 @@ function canAccessJob(job, { clientId, token } = {}) {
   return false;
 }
 
+function sanitizeSegments(segments) {
+  if (!Array.isArray(segments)) return null;
+  const out = [];
+  for (const item of segments.slice(0, 800)) {
+    const t = sanitizeText(item);
+    if (t) out.push(t);
+  }
+  return out.length ? out : null;
+}
+
+function sanitizeParaMap(map, maxLen) {
+  if (!Array.isArray(map)) return null;
+  const limit = Math.min(maxLen || 800, 800);
+  return map.slice(0, limit).map((n) => Math.max(0, Math.min(500, Number(n) | 0)));
+}
+
+function sanitizeSentenceList(list) {
+  if (!Array.isArray(list)) return null;
+  const out = [];
+  for (const item of list.slice(0, 600)) {
+    out.push(sanitizeText(item) || '');
+  }
+  return out.length ? out : null;
+}
+
+function rebuildTranslationFromSentences(sentences, paraMap) {
+  if (!Array.isArray(sentences) || !sentences.length) return '';
+  const maxPi = Array.isArray(paraMap) && paraMap.length
+    ? Math.max(...paraMap.map((n) => Number(n) | 0))
+    : 0;
+  const buckets = Array.from({ length: maxPi + 1 }, () => []);
+  sentences.forEach((s, i) => {
+    const part = String(s || '').trim();
+    if (!part) return;
+    const pi = Array.isArray(paraMap) ? (Number(paraMap[i]) | 0) : 0;
+    buckets[pi].push(part);
+  });
+  return buckets.map((b) => b.join(' ')).filter(Boolean).join('\n\n');
+}
+
 function publicJob(job) {
   if (!job) return null;
   const sourceFile = job.sourceFile && typeof job.sourceFile === 'object'
@@ -235,6 +275,7 @@ function publicJob(job) {
     id: job.id,
     clientId: job.clientId,
     originalText: job.originalText,
+    originalSegments: Array.isArray(job.originalSegments) ? job.originalSegments : null,
     language: job.language,
     aiTranslation: job.aiTranslation,
     qaOnly: !!job.qaOnly,
@@ -251,6 +292,9 @@ function revisorJob(job) {
   if (!base) return null;
   return {
     ...base,
+    sourceSentences: Array.isArray(job.sourceSentences) ? job.sourceSentences : null,
+    translationSentences: Array.isArray(job.translationSentences) ? job.translationSentences : null,
+    sentenceParaMap: Array.isArray(job.sentenceParaMap) ? job.sentenceParaMap : null,
     sourceWordCount: typeof job.sourceWordCount === 'number' ? job.sourceWordCount : undefined,
     claimedByRevisorId: job.claimedByRevisorId || null,
     claimedAt: job.claimedAt || null,
@@ -423,6 +467,10 @@ function buildClientJob(body) {
   if (!clientEmail) throw new Error('A delivery email is required');
   const qaOnly = body.qaOnly === true;
   const originalText = sanitizeText(body.originalText);
+  const originalSegments = sanitizeSegments(body.originalSegments);
+  const sourceSentences = sanitizeSentenceList(body.sourceSentences);
+  const translationSentences = sanitizeSentenceList(body.translationSentences);
+  const sentenceParaMap = sanitizeParaMap(body.sentenceParaMap, sourceSentences?.length);
   const aiTranslation = sanitizeText(body.aiTranslation || (qaOnly ? body.originalText : ''));
   if (qaOnly) {
     if (!aiTranslation) throw new Error('Translation is required');
@@ -451,8 +499,14 @@ function buildClientJob(body) {
     deliveryToken: crypto.randomBytes(24).toString('hex'),
     deliveryEmailedAt: null,
     originalText,
+    originalSegments: originalSegments || (originalText ? originalText.split(/\n{2,}/).map((s) => s.trim()).filter(Boolean) : null),
+    sourceSentences,
+    translationSentences,
+    sentenceParaMap,
     language,
-    aiTranslation,
+    aiTranslation: translationSentences?.length
+      ? (rebuildTranslationFromSentences(translationSentences, sentenceParaMap) || aiTranslation)
+      : aiTranslation,
     qaOnly,
     status: 'awaiting_review',
     revisedTranslation: null,
@@ -476,6 +530,8 @@ module.exports = {
   issueChallenge,
   loadTurnstileConfig,
   publicJob,
+  rebuildTranslationFromSentences,
+  sanitizeSentenceList,
   revisorJob,
   sourceFileForDownload,
   rateLimit,

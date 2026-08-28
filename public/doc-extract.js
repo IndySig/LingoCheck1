@@ -32,6 +32,108 @@
     return false;
   }
 
+  function mergeShortBlocks(blocks) {
+    if (global.LcTextSegments && global.LcTextSegments.mergeFragmentBlocks) {
+      return global.LcTextSegments.mergeFragmentBlocks(blocks);
+    }
+    const out = [];
+    let buf = [];
+    function flush() {
+      if (!buf.length) return;
+      const text = buf.map((b) => collapseSpaces(b.text)).join(" ");
+      out.push({
+        type: "paragraph",
+        text,
+        x: Math.min(...buf.map((b) => b.x)),
+        x2: Math.max(...buf.map((b) => b.x2)),
+        y: Math.min(...buf.map((b) => b.y)),
+        y2: Math.max(...buf.map((b) => b.y2)),
+        topY: Math.max(...buf.map((b) => b.topY || b.y2)),
+        fontSize: Math.max(...buf.map((b) => b.fontSize || 11)),
+      });
+      buf = [];
+    }
+    for (const b of blocks) {
+      const t = collapseSpaces(b.text);
+      if (!t) continue;
+      if (b.type === "list-item" || b.type === "table-row") {
+        flush();
+        out.push(b);
+        continue;
+      }
+      const words = t.split(/\s+/).length;
+      const short = words <= 3 && t.length < 45 && !/[.!?;:]$/.test(t);
+      if (short) {
+        buf.push(b);
+        continue;
+      }
+      flush();
+      out.push(b);
+    }
+    flush();
+    return out;
+  }
+
+  function finalizeSegments(blocks) {
+    const merged = mergeShortBlocks(blocks);
+    let segments = blocksToSegmentTexts(merged);
+    if (global.LcTextSegments && global.LcTextSegments.normalizeDocumentSegments) {
+      segments = global.LcTextSegments.normalizeDocumentSegments(segments);
+    }
+    return { merged, segments };
+  }
+
+  function blocksToSegmentTexts(blocks) {
+    const segments = [];
+    let listRun = [];
+    let tableRun = [];
+
+    function flushList() {
+      if (listRun.length) {
+        segments.push(listRun.join("\n"));
+        listRun = [];
+      }
+    }
+    function flushTable() {
+      if (tableRun.length) {
+        segments.push(tableRun.join("\n"));
+        tableRun = [];
+      }
+    }
+
+    for (const b of blocks) {
+      const t = collapseSpaces(b.text);
+      if (!t) continue;
+      if (b.type === "list-item") {
+        flushTable();
+        listRun.push(t);
+      } else if (b.type === "table-row") {
+        flushList();
+        tableRun.push(t);
+      } else {
+        flushList();
+        flushTable();
+        segments.push(t);
+      }
+    }
+    flushList();
+    flushTable();
+    return segments;
+  }
+
+  function blockBounds(paraLines) {
+    const fontSize = paraLines.reduce((m, l) => Math.max(m, l.fontSize), 11);
+    const y2 = Math.max(...paraLines.map((l) => l.y));
+    return {
+      x: Math.min(...paraLines.map((l) => l.x)),
+      x2: Math.max(...paraLines.map((l) => l.x2)),
+      y: Math.min(...paraLines.map((l) => l.y)),
+      y2,
+      topY: y2 + fontSize * 0.85,
+      fontSize,
+    };
+  }
+
   function assembleBlocks(blocks) {
     const chunks = [];
     let listRun = [];
@@ -195,7 +297,7 @@
     const kept = useFilter ? filterPdfLines(lines, viewport.width, viewport.height, med) : lines;
     const active = kept.length ? kept : lines;
     return {
-      blocks: linesToBlocks(active, med),
+      blocks: linesToBlocks(active, med, viewport.width),
       plain: linesToPlainText(active),
     };
   }
@@ -209,10 +311,15 @@
     return parts.join(" ").replace(/\s+/g, " ").trim();
   }
 
-  function linesToBlocks(lines, medianSize) {
+  function linesToBlocks(lines, medianSize, pageWidth) {
     const blocks = [];
     let paraLines = [];
     let prevY = null;
+    const joinLines = global.LcTextSegments && global.LcTextSegments.shouldJoinLines;
+
+    function lineCenter(line) {
+      return (line.x + line.x2) / 2;
+    }
 
     function flushPara() {
       if (!paraLines.length) return;
@@ -220,12 +327,29 @@
       const texts = paraLines.map((l) => lineGlyphsToText(l.glyphs, gapTh));
       const tableLike = texts.filter((t) => t.includes("\t")).length >= Math.max(2, Math.ceil(texts.length * 0.5));
       if (tableLike) {
-        for (const t of texts) blocks.push({ type: "table-row", text: t.replace(/\t/g, " | ") });
+        for (let i = 0; i < texts.length; i++) {
+          const ln = paraLines[i];
+          const fontSize = ln.fontSize || medianSize;
+          blocks.push({
+            type: "table-row",
+            text: texts[i].replace(/\t/g, " | "),
+            x: ln.x,
+            x2: ln.x2,
+            y: ln.y,
+            y2: ln.y,
+            topY: ln.y + fontSize * 0.85,
+            fontSize,
+          });
+        }
       } else {
+        const bounds = blockBounds(paraLines);
         const isHeading = paraLines.length === 1 && paraLines[0].fontSize >= medianSize * 1.12;
         const joined = texts.join(" ");
-        if (isHeading) blocks.push({ type: "heading", text: joined });
-        else blocks.push({ type: "paragraph", text: joined });
+        blocks.push({
+          type: isHeading ? "heading" : "paragraph",
+          text: joined,
+          ...bounds,
+        });
       }
       paraLines = [];
     }
@@ -235,10 +359,46 @@
       const text = lineGlyphsToText(line.glyphs, gapTh);
       if (!text) continue;
       const lineH = line.fontSize * 1.35;
-      if (prevY !== null && prevY - line.y > lineH * 1.8) flushPara();
+      const gap = prevY !== null ? prevY - line.y : 0;
+      const prevText = paraLines.length
+        ? lineGlyphsToText(paraLines[paraLines.length - 1].glyphs, gapTh)
+        : "";
+      const stackedTitle =
+        paraLines.length > 0 &&
+        text.length < 100 &&
+        prevText.length < 100 &&
+        !/[.!?]$/.test(prevText) &&
+        !isListItemLine(text) &&
+        gap < lineH * 5 &&
+        (!pageWidth || Math.abs(lineCenter(line) - lineCenter(paraLines[0])) < pageWidth * 0.15);
+      if (
+        paraLines.length &&
+        joinLines &&
+        joinLines(prevText, text) &&
+        gap < lineH * 2.8
+      ) {
+        const prev = paraLines[paraLines.length - 1];
+        prev.glyphs = prev.glyphs.concat(line.glyphs);
+        prev.x = Math.min(prev.x, line.x);
+        prev.x2 = Math.max(prev.x2, line.x2);
+        prev.y = Math.min(prev.y, line.y);
+        prevY = line.y;
+        continue;
+      }
+      if (prevY !== null && gap > lineH * 1.8 && !stackedTitle) flushPara();
       if (isListItemLine(text)) {
         flushPara();
-        blocks.push({ type: "list-item", text });
+        const fontSize = line.fontSize || medianSize;
+        blocks.push({
+          type: "list-item",
+          text,
+          x: line.x,
+          x2: line.x2,
+          y: line.y,
+          y2: line.y,
+          topY: line.y + fontSize * 0.85,
+          fontSize,
+        });
         prevY = line.y;
         continue;
       }
@@ -280,12 +440,44 @@
       if (legacy) legacyParts.push(legacy);
     }
 
-    let text = assembleBlocks(layoutBlocks);
+    const { merged, segments } = finalizeSegments(layoutBlocks);
+    let text = assembleBlocks(merged);
+    if (global.LcTextSegments && global.LcTextSegments.segmentsToDisplayText) {
+      text = global.LcTextSegments.segmentsToDisplayText(segments);
+    }
     if (textLen(text) < 30) text = unfilteredPlainParts.join("\n\n").trim();
     if (textLen(text) < 30) text = legacyParts.join("\n\n").trim();
 
     const tooLittle = textLen(text) < 30;
-    return { text, hasImages: images, isScannedLike: tooLittle };
+    return { text, segments, hasImages: images, isScannedLike: tooLittle };
+  }
+
+  async function extractPdfReplaceLayout(fileOrBuf) {
+    if (!global.pdfjsLib) throw new Error("PDF support not loaded");
+    const buf = await toArrayBuffer(fileOrBuf);
+    const uint8 = new Uint8Array(buf);
+    const doc = await global.pdfjsLib.getDocument({ data: uint8.slice(), isEvalSupported: false, disableFontFace: true }).promise;
+    const pages = [];
+    const segments = [];
+    for (let i = 1; i <= doc.numPages; i++) {
+      const page = await doc.getPage(i);
+      const { blocks } = await extractPdfPageLayout(page, true);
+      const { merged, segments: pageSegments } = finalizeSegments(blocks);
+      const slots = merged
+        .map((b) => ({
+          text: collapseSpaces(b.text),
+          x: b.x || 0,
+          x2: b.x2 || 0,
+          y: b.y || 0,
+          y2: b.y2 || b.y || 0,
+          topY: b.topY || b.y2 || b.y || 0,
+          fontSize: b.fontSize || 11,
+        }))
+        .filter((s) => s.text);
+      pages.push({ slots });
+      for (const slot of slots) segments.push(slot.text);
+    }
+    return { pages, segments: global.LcTextSegments ? global.LcTextSegments.normalizeDocumentSegments(segments) : segments };
   }
 
   function xmlLocalName(el) {
@@ -406,8 +598,11 @@
         if (text) blocks.push({ type: docxParagraphKind(p), text });
       }
     }
-    const text = assembleBlocks(blocks);
-    return { text, hasImages: hasMedia, hasDrawing, blocked: false };
+    const { merged, segments } = finalizeSegments(blocks);
+    const text = global.LcTextSegments
+      ? global.LcTextSegments.segmentsToDisplayText(segments)
+      : assembleBlocks(merged);
+    return { text, segments, hasImages: hasMedia, hasDrawing, blocked: false };
   }
 
   function extractPlainText(raw) {
@@ -462,11 +657,16 @@
       prevBlank = false;
     }
     flushPara();
-    return assembleBlocks(blocks);
+    const { merged, segments } = finalizeSegments(blocks);
+    const text = global.LcTextSegments
+      ? global.LcTextSegments.segmentsToDisplayText(segments)
+      : assembleBlocks(merged);
+    return { text, segments };
   }
 
   global.LcDocExtract = {
     extractPdfText,
+    extractPdfReplaceLayout,
     extractDocxText,
     extractPlainText,
     truncateExtractedText,

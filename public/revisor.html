@@ -4,6 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>LingoCheck — Revisor Panel</title>
+<script src="text-segments.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/react/18.2.0/umd/react.production.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.2.0/umd/react-dom.production.min.js"></script>
 <link href="https://fonts.googleapis.com/css2?family=Kufam:ital,wght@0,400;0,500;0,600;0,700;1,400&display=swap" rel="stylesheet">
@@ -58,73 +59,42 @@ async function apiFetch(path,opts={}){const r=await fetch(path,{headers:{"Conten
 
 function Spinner({size=18}){return React.createElement("span",{style:{display:"inline-block",width:size,height:size,border:"2px solid rgba(109,79,216,0.18)",borderTopColor:C.accent,borderRadius:"50%",animation:"spin 0.55s linear infinite",verticalAlign:"middle"}});}
 
-function splitKeepPrefix(text, re){
-  const parts = [];
-  let last = 0;
-  let m;
-  const r = new RegExp(re.source, re.flags.includes("g") ? re.flags : re.flags + "g");
-  while((m = r.exec(text)) !== null){
-    const end = m.index + (m[1] ? m[1].length : 0);
-    if(end > last){
-      const piece = text.slice(last, end).trim();
-      if(piece) parts.push(piece);
+function coalesceShortSegments(segments){
+  const src = (segments || []).map(s => String(s || "").trim()).filter(Boolean);
+  if(src.length <= 1) return src;
+  const avg = src.reduce((sum, s) => sum + s.length, 0) / src.length;
+  if(avg >= 28) return src;
+  const out = [];
+  let buf = [];
+  for(const t of src){
+    const words = t.split(/\s+/).filter(Boolean).length;
+    const short = words <= 12 && t.length < 140 && !/[.!?]$/.test(t) && !/^\d+[\.\)]/.test(t);
+    if(short) buf.push(t);
+    else{
+      if(buf.length){ out.push(buf.join(" ")); buf = []; }
+      out.push(t);
     }
-    last = m.index + m[0].length;
   }
-  const tail = text.slice(last).trim();
-  if(tail) parts.push(tail);
-  return parts.length ? parts : [String(text||"").trim()].filter(Boolean);
+  if(buf.length) out.push(buf.join(" "));
+  return out.length ? out : src;
 }
 
-function splitBefore(text, re){
-  const parts = [];
-  let last = 0;
-  let m;
-  const r = new RegExp(re.source, re.flags.includes("g") ? re.flags : re.flags + "g");
-  while((m = r.exec(text)) !== null){
-    const piece = text.slice(last, m.index).trim();
-    if(piece) parts.push(piece);
-    last = m.index + m[0].length;
+function getTextSegments(job, text){
+  const TS = window.LcTextSegments;
+  let segs;
+  if(job && Array.isArray(job.originalSegments) && job.originalSegments.length){
+    segs = TS ? TS.normalizeDocumentSegments(job.originalSegments) : job.originalSegments.map(s => String(s||"").trim()).filter(Boolean);
+  }else{
+    const raw = String(text||"").trim();
+    if(!raw) return [];
+    segs = TS ? TS.normalizeDocumentSegments(raw) : raw.split(/\n{2,}/).map(s => s.trim()).filter(Boolean);
   }
-  const tail = text.slice(last).trim();
-  if(tail) parts.push(tail);
-  return parts.length ? parts : [String(text||"").trim()].filter(Boolean);
+  return coalesceShortSegments(segs);
 }
 
-function splitSingleLineUnits(text){
-  let units = [String(text||"").replace(/\s+/g," ").trim()];
-  if(!units[0]) return [];
-
-  units = units.flatMap(u => splitKeepPrefix(u, /([.!?]["')\]]*)\s+(?=[A-Z\u00C0-\u024F\u0400-\u04FF])/g));
-  units = units.flatMap(u => splitKeepPrefix(u, /(\b[A-Z]{2,})\s+(?=[A-Z][a-z])/g));
-  units = units.flatMap(u => splitBefore(u, /\s+(?=\d+(?:\.\d+)+\s+[A-Z])/g));
-  units = units.flatMap(u => splitKeepPrefix(u, /([a-z0-9,])(\s+)(?=[A-Z][a-z]{2,})/g));
-
-  return units.map(s => s.trim()).filter(Boolean);
-}
-
-function splitSentences(text){
-  var raw=(text||"").trim();
-  if(!raw) return [];
-
-  var lines=raw.split(/\r?\n/).map(function(l){return l.trim();}).filter(Boolean);
-  if(lines.length>1){
-    var out=[];
-    for(var li=0;li<lines.length;li++){
-      var line=lines[li];
-      var isNumbered=/^\s*\d+[\.\)\]]\s/.test(line);
-      var isSection=/^\s*\d+(?:\.\d+)+\s+[A-Z]/.test(line);
-      if(isNumbered || isSection){ out.push(line); }
-      else{
-        var ss=splitSingleLineUnits(line);
-        for(var si=0;si<ss.length;si++) out.push(ss[si]);
-      }
-    }
-    return out;
-  }
-
-  var units=splitSingleLineUnits(raw.replace(/\s+/g," "));
-  return units.length ? units : [raw];
+function splitIntoSentences(segment){
+  const TS = window.LcTextSegments;
+  return TS ? TS.splitSegmentIntoSentences(segment) : [String(segment||"").trim()].filter(Boolean);
 }
 
 function splitTextByWeights(text, weights){
@@ -146,39 +116,86 @@ function splitTextByWeights(text, weights){
   return result;
 }
 
-function alignTranslationToOriginalSentences(origSentences, translationText){
-  const orig = Array.isArray(origSentences) ? origSentences : [];
+function alignTranslationToSegments(origSegments, translationText){
+  const TS = window.LcTextSegments;
+  const orig = Array.isArray(origSegments)
+    ? (TS ? TS.normalizeDocumentSegments(origSegments) : origSegments.map((s) => String(s || "").trim()).filter(Boolean))
+    : getTextSegments(null, origSegments);
   const n = orig.length;
   if(n === 0) return [];
   const t = String(translationText||"").trim();
   if(!t) return Array.from({length:n}, ()=>"");
 
-  const transSentences = splitSentences(t);
-  if(transSentences.length === n) return transSentences;
+  const parts = window.LcTextSegments
+    ? LcTextSegments.normalizeDocumentSegments(t)
+    : t.split(/\n{2,}/).map(s => s.trim()).filter(Boolean);
+  if(parts.length === n) return parts;
 
   const weights = orig.map(s => Math.max(1, String(s||"").replace(/\s+/g," ").trim().length));
 
-  if(transSentences.length > n){
+  if(parts.length > n){
     const out = [];
     let j = 0;
-    const m = transSentences.length;
     for(let i=0;i<n;i++){
       if(i === n - 1){
-        out.push(transSentences.slice(j).join(" "));
+        out.push(parts.slice(j).join("\n\n"));
         break;
       }
-      const remaining = m - j;
+      const remaining = parts.length - j;
       const slotsLeft = n - i;
       const weightLeft = weights.slice(i).reduce((a,b)=>a+b,0) || 1;
       let take = Math.max(1, Math.round(remaining * (weights[i] / weightLeft)));
       take = Math.min(take, remaining - (slotsLeft - 1));
-      out.push(transSentences.slice(j, j + take).join(" "));
+      out.push(parts.slice(j, j + take).join("\n\n"));
       j += take;
     }
     return out;
   }
 
-  return splitTextByWeights(t, weights);
+  return splitTextByWeights(t.replace(/\n+/g, " "), weights);
+}
+
+function buildSentenceReview(job, sourceText, translationText){
+  const TS = window.LcTextSegments;
+  const segments = getTextSegments(job, sourceText);
+  if(!segments.length) return { sentences: [], transSentences: [], paraMap: [], paragraphCount: 0 };
+
+  if(TS && TS.alignSentenceTranslations){
+    const storedTrans = job?.translationSentences;
+    const review = TS.alignSentenceTranslations(
+      segments,
+      translationText,
+      storedTrans
+    );
+    if(job && job.qaOnly){
+      return {
+        sentences: review.sentences,
+        transSentences: review.sentences.slice(),
+        paraMap: review.paraMap,
+        paragraphCount: review.paragraphCount
+      };
+    }
+    return review;
+  }
+
+  const units = TS ? TS.buildSentenceUnits(segments) : { sentences: [], paraMap: [], paragraphCount: 0 };
+  return {
+    sentences: units.sentences,
+    transSentences: units.sentences.map(() => ""),
+    paraMap: units.paraMap,
+    paragraphCount: units.paragraphCount
+  };
+}
+
+function sentencesToParagraphText(sentences, paraMap, paragraphCount){
+  const buckets = Array.from({ length: Math.max(1, paragraphCount) }, () => []);
+  (sentences || []).forEach((s, i) => {
+    const pi = paraMap[i] ?? 0;
+    const part = String(s || "").trim();
+    if(part) buckets[pi].push(part);
+  });
+  const paras = buckets.map((b) => b.join(" ")).filter(Boolean);
+  return window.LcTextSegments ? LcTextSegments.segmentsToDisplayText(paras) : paras.join("\n\n");
 }
 
 function fmtEur(cents){
@@ -345,8 +362,11 @@ function QueueTab({me,allJobs,claimJob,setTab}){
 function ReviewEditor({selectedJob,updateJob,onDone}){
   const e=React.createElement;
   const[editedText,setEditedText]=useState(selectedJob.revisedTranslation||selectedJob.aiTranslation||"");
-  const[mode,setMode]=useState("full");
+  const[mode,setMode]=useState("sentences");
+  const[origSentences,setOrigSentences]=useState([]);
   const[editedSentences,setEditedSentences]=useState([]);
+  const[sentenceParaMap,setSentenceParaMap]=useState([]);
+  const[paragraphCount,setParagraphCount]=useState(0);
   const[sending,setSending]=useState(false);
   const[isWide,setIsWide]=useState(()=>window.matchMedia && window.matchMedia("(min-width: 900px)").matches);
 
@@ -365,22 +385,28 @@ function ReviewEditor({selectedJob,updateJob,onDone}){
 
   useEffect(()=>{
     setEditedText(selectedJob.revisedTranslation||selectedJob.aiTranslation||"");
-    const orig = splitSentences(selectedJob.qaOnly ? (selectedJob.aiTranslation||"") : selectedJob.originalText);
-    const initial = selectedJob.qaOnly
-      ? orig
-      : alignTranslationToOriginalSentences(orig, selectedJob.revisedTranslation||selectedJob.aiTranslation);
-    setEditedSentences(initial);
-    setMode("full");
+    const source = selectedJob.qaOnly ? (selectedJob.aiTranslation||"") : selectedJob.originalText;
+    const translation = selectedJob.revisedTranslation||selectedJob.aiTranslation||"";
+    const review = buildSentenceReview(selectedJob, source, translation);
+    setOrigSentences(review.sentences);
+    setEditedSentences(review.transSentences);
+    setSentenceParaMap(review.paraMap);
+    setParagraphCount(review.paragraphCount);
+    setMode("sentences");
   },[selectedJob.id]);
 
   async function handleSend(){
     const finalText = mode==="sentences"
-      ? (editedSentences||[]).map(s=>String(s||"").trim()).filter(Boolean).join(" ")
+      ? sentencesToParagraphText(editedSentences, sentenceParaMap, paragraphCount)
       : (editedText||"").trim();
     if(!finalText) return;
     setSending(true);
     try{
-      await updateJob(selectedJob.id,{status:"complete",revisedTranslation:finalText});
+      const patch = { status:"complete", revisedTranslation:finalText };
+      if(mode==="sentences" && editedSentences.length){
+        patch.translationSentences = editedSentences.map(s => String(s||"").trim());
+      }
+      await updateJob(selectedJob.id, patch);
       onDone&&onDone();
     }catch(ex){
       alert(ex.message);
@@ -398,7 +424,7 @@ function ReviewEditor({selectedJob,updateJob,onDone}){
       e("div",{style:{fontSize:12,color:C.muted}},"Mode:"),
       e("div",{style:{display:"flex",gap:8}},
         e("button",{onClick:()=>setMode("full"),style:{...st.btn,background:mode==="full"?"rgba(109,79,216,0.10)":"transparent",border:`1px solid ${mode==="full"?"rgba(109,79,216,0.28)":C.border}`,color:mode==="full"?C.accent:C.muted,fontSize:12,padding:"6px 10px"}},"Full text"),
-        !selectedJob.qaOnly&&e("button",{onClick:()=>setMode("sentences"),style:{...st.btn,background:mode==="sentences"?"rgba(109,79,216,0.10)":"transparent",border:`1px solid ${mode==="sentences"?"rgba(109,79,216,0.28)":C.border}`,color:mode==="sentences"?C.accent:C.muted,fontSize:12,padding:"6px 10px"}},"Sentence-by-sentence")
+        e("button",{onClick:()=>setMode("sentences"),style:{...st.btn,background:mode==="sentences"?"rgba(109,79,216,0.10)":"transparent",border:`1px solid ${mode==="sentences"?"rgba(109,79,216,0.28)":C.border}`,color:mode==="sentences"?C.accent:C.muted,fontSize:12,padding:"6px 10px"}},"Sentence-by-sentence")
       )
     ),
     mode==="full"
@@ -416,15 +442,15 @@ function ReviewEditor({selectedJob,updateJob,onDone}){
         )
       )
       :e("div",{style:{...st.card,padding:18,marginBottom:14}},
-        e("div",{style:{display:"grid",gridTemplateColumns:isWide?"1fr 1fr":"1fr",gap:12,alignItems:"start"}},
-          e("div",{style:{fontSize:11,letterSpacing:"1px",textTransform:"uppercase",color:C.muted,marginBottom:isWide?0:6}},"Original — English"),
+        e("div",{style:{display:"grid",gridTemplateColumns:isWide && !selectedJob.qaOnly?"1fr 1fr":"1fr",gap:12,alignItems:"start"}},
+          !selectedJob.qaOnly&&e("div",{style:{fontSize:11,letterSpacing:"1px",textTransform:"uppercase",color:C.muted,marginBottom:isWide?0:6}},"Original — English"),
           e("div",{style:{fontSize:11,letterSpacing:"1px",textTransform:"uppercase",color:C.light,marginBottom:isWide?0:12}},"Editable — ",selectedJob.language)
         ),
-        splitSentences(selectedJob.originalText).map((origSentence, idx)=>{
+        origSentences.map((origSentence, idx)=>{
           const val = editedSentences[idx] ?? "";
-          return e("div",{key:idx,style:{display:"grid",gridTemplateColumns:isWide?"1fr 1fr":"1fr",gap:12,marginTop:10,paddingTop:10,borderTop:`1px solid ${C.border}`}},
-            e("div",{style:{fontSize:13,color:C.muted,lineHeight:1.75,whiteSpace:"pre-wrap"}},origSentence),
-            e("textarea",{style:{...st.ta,minHeight:90},value:val,onChange:ev=>{
+          return e("div",{key:idx,style:{display:"grid",gridTemplateColumns:isWide && !selectedJob.qaOnly?"1fr 1fr":"1fr",gap:12,marginTop:10,paddingTop:10,borderTop:`1px solid ${C.border}`}},
+            !selectedJob.qaOnly&&e("div",{style:{fontSize:13,color:C.muted,lineHeight:1.75,whiteSpace:"pre-wrap"}},origSentence),
+            e("textarea",{style:{...st.ta,minHeight:72},value:val,onChange:ev=>{
               const next=[...editedSentences];
               next[idx]=ev.target.value;
               setEditedSentences(next);

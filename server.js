@@ -789,6 +789,86 @@ async function requireHuman(req, res, body) {
   return false;
 }
 
+const SENTENCE_DELIM = '\u241E';
+const SENTENCE_CHUNK_SIZE = 18;
+
+async function callAnthropicTranslation(system, userContent, apiKey, maxTokens = 8192) {
+  const response = await fetch('https://api.anthropic.com/v1/messages', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'x-api-key': apiKey,
+      'anthropic-version': '2023-06-01'
+    },
+    body: JSON.stringify({
+      model: 'claude-sonnet-4-6',
+      max_tokens: maxTokens,
+      system,
+      messages: [{ role: 'user', content: userContent }]
+    })
+  });
+  const data = await response.json().catch(() => ({}));
+  if (!response.ok) {
+    console.error('[LingoCheck] Translation API error:', response.status, data?.error?.type || '', data?.error?.message || '');
+    throw new Error('Translation service unavailable');
+  }
+  return security.sanitizeText(data.content?.[0]?.text || '', security.MAX_TEXT_CHARS);
+}
+
+async function translateOneSentence(sentence, language, apiKey) {
+  const text = String(sentence || '').trim();
+  if (!text) return '';
+  return callAnthropicTranslation(
+    `Translate the user's English sentence to ${language}. Return ONLY the translated sentence — no quotes or commentary.`,
+    text,
+    apiKey,
+    2048
+  );
+}
+
+function splitDelimitedSentences(raw, expectedCount) {
+  let parts = String(raw || '').split(SENTENCE_DELIM).map((s) => s.trim());
+  if (parts.length > expectedCount) {
+    const head = parts.slice(0, expectedCount - 1);
+    head.push(parts.slice(expectedCount - 1).join(' '));
+    parts = head;
+  }
+  while (parts.length < expectedCount) parts.push('');
+  return parts.slice(0, expectedCount);
+}
+
+async function translateSentenceBatch(sentences, language, apiKey) {
+  const clean = sentences.map((s) => String(s || '').trim());
+  if (!clean.length) return [];
+  const packed = clean.join(SENTENCE_DELIM);
+  const system = `You are a professional translator. Translate each English text unit to ${language}. Units are separated by the Unicode character ␞ (U+241E). You MUST output exactly ${clean.length} translated units in the same order, each separated by ␞. Do not add, remove, merge, split, or reorder units. Return ONLY the translated units with ␞ between them — no labels or commentary.`;
+  const raw = await callAnthropicTranslation(system, packed, apiKey);
+  return splitDelimitedSentences(raw, clean.length);
+}
+
+async function translateSentenceList(sentences, language, apiKey) {
+  const clean = sentences.map((s) => String(s || '').trim());
+  if (!clean.length) return [];
+
+  if (!apiKey) {
+    return clean.map((s) => (language === 'Dutch' ? `[DEMO] ${s}` : `[DEMO ${language}] ${s}`));
+  }
+
+  const out = [];
+  for (let i = 0; i < clean.length; i += SENTENCE_CHUNK_SIZE) {
+    const chunk = clean.slice(i, i + SENTENCE_CHUNK_SIZE);
+    let parts = await translateSentenceBatch(chunk, language, apiKey);
+    if (parts.length !== chunk.length) {
+      parts = [];
+      for (const sentence of chunk) {
+        parts.push(await translateOneSentence(sentence, language, apiKey));
+      }
+    }
+    out.push(...parts);
+  }
+  return out;
+}
+
 async function handleTranslate(req, res) {
   if (!enforceJsonContentType(req, res)) return;
   if (!enforceRateLimit(req, res, 'translate', { limit: 8, windowMs: 60 * 1000 })) return;
@@ -797,8 +877,24 @@ async function handleTranslate(req, res) {
 
   const text = security.sanitizeText(body.text);
   const language = security.sanitizeLanguage(body.language);
-  if (!text || !language) return sendJson(res, 400, { error: 'Missing text or language' });
+  const sourceSentences = security.sanitizeSentenceList(body.sentences);
+  const sentenceParaMap = Array.isArray(body.sentenceParaMap) ? body.sentenceParaMap : null;
+  if (!language) return sendJson(res, 400, { error: 'Missing language' });
   const apiKey = loadAnthropicApiKey();
+
+  if (sourceSentences && sourceSentences.length) {
+    try {
+      const translationSentences = await translateSentenceList(sourceSentences, language, apiKey);
+      const translation = security.rebuildTranslationFromSentences(translationSentences, sentenceParaMap)
+        || translationSentences.join(' ');
+      return sendJson(res, 200, { translation, translationSentences });
+    } catch (e) {
+      console.error('[LingoCheck] Sentence translation failed:', e?.message || e);
+      return sendJson(res, 502, { error: 'Translation service unavailable' });
+    }
+  }
+
+  if (!text) return sendJson(res, 400, { error: 'Missing text or language' });
   if (!apiKey) {
     const demoTranslation =
       language === 'Dutch' ? `[DEMO] ${text}` : `[DEMO ${language}] ${text}`;
@@ -806,28 +902,11 @@ async function handleTranslate(req, res) {
   }
 
   try {
-    const response = await fetch('https://api.anthropic.com/v1/messages', {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'x-api-key': apiKey,
-        'anthropic-version': '2023-06-01'
-      },
-      body: JSON.stringify({
-        model: 'claude-sonnet-4-6',
-        max_tokens: 8192,
-        system: `You are a professional translation engine. Translate the user's English text to ${language}. Return ONLY the translated text — no explanations, no quotes, no preamble.`,
-        messages: [{ role: 'user', content: text }]
-      })
-    });
-
-    const data = await response.json().catch(() => ({}));
-    if (!response.ok) {
-      console.error('[LingoCheck] Translation API error:', response.status, data?.error?.type || '', data?.error?.message || '');
-      return sendJson(res, 502, { error: 'Translation service unavailable' });
-    }
-
-    const translation = security.sanitizeText(data.content?.[0]?.text || '', security.MAX_TEXT_CHARS);
+    const translation = await callAnthropicTranslation(
+      `You are a professional translation engine. Translate the user's English text to ${language}. The input is divided into paragraphs separated by blank lines (double newlines). You MUST preserve the exact same number of paragraphs in the same order, using double newlines between each translated paragraph. Translate each paragraph completely — do not merge, split, or reorder paragraphs. Return ONLY the translated text — no explanations, no quotes, no preamble.`,
+      text,
+      apiKey
+    );
     return sendJson(res, 200, { translation });
   } catch (e) {
     console.error('[LingoCheck] Translation failed:', e?.message || e);
@@ -884,7 +963,17 @@ async function handleRevisorPatch(req, res, id, session) {
   const revised = typeof body.revisedTranslation === 'string'
     ? security.sanitizeText(body.revisedTranslation, security.MAX_TEXT_CHARS)
     : job.revisedTranslation;
+  const translationSentences = security.sanitizeSentenceList(body.translationSentences);
   const merged = { ...job, revisedTranslation: revised };
+  if (translationSentences) {
+    merged.translationSentences = translationSentences;
+    if (!revised) {
+      merged.revisedTranslation = security.rebuildTranslationFromSentences(
+        translationSentences,
+        job.sentenceParaMap
+      ) || translationSentences.join(' ');
+    }
+  }
   const completing = body.status === 'complete' && job.status !== 'complete';
   if (completing) {
     if (!revised) return sendJson(res, 400, { error: 'Translation is required' });

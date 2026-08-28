@@ -53,6 +53,7 @@
 </head>
 <body>
 <div id="root"></div>
+<script src="text-segments.js"></script>
 <script src="doc-extract.js"></script>
 <script>
 const {useState,useEffect,useCallback,useRef}=React;
@@ -228,33 +229,40 @@ function collectDocxParagraphTexts(xmlStr){
 }
 
 function alignTranslatedParagraphs(translated, originalTexts){
-  var originals = (originalTexts||[]).filter(Boolean);
+  var TS = window.LcTextSegments;
+  var originals = TS
+    ? TS.normalizeDocumentSegments(originalTexts || [])
+    : (originalTexts||[]).map(function(s){ return String(s||"").trim(); }).filter(Boolean);
   if(!originals.length) return [String(translated||"").trim()];
   var n = originals.length;
   var text = String(translated||"").trim();
   if(!text) return Array.from({length:n}, function(){ return ""; });
 
-  // Try splitting on double-newline (paragraphs)
   var parts = text.split(/\n{2,}/).map(function(s){ return s.trim(); }).filter(Boolean);
-
-  // Try splitting on single newlines if closer to n
-  if(Math.abs(parts.length - n) > Math.abs(text.split(/\n/).filter(function(s){ return s.trim(); }).length - n)){
-    var byLine = text.split(/\n/).map(function(s){ return s.trim(); }).filter(Boolean);
-    if(byLine.length >= n) parts = byLine;
-  }
-
   if(parts.length === n) return parts;
 
-  // If we have more parts than slots, merge extras into last slot
   if(parts.length > n){
-    var head = parts.slice(0, n-1);
-    head.push(parts.slice(n-1).join(" "));
-    return head;
+    var out = [];
+    var j = 0;
+    for(var i=0;i<n;i++){
+      if(i === n - 1){
+        out.push(parts.slice(j).join("\n\n"));
+        break;
+      }
+      var remaining = parts.length - j;
+      var slotsLeft = n - i;
+      var weights = originals.slice(i).map(function(s){ return Math.max(1, String(s).replace(/\s+/g,"").length); });
+      var weightLeft = weights.reduce(function(a,b){ return a+b; }, 0) || 1;
+      var take = Math.max(1, Math.round(remaining * (weights[0] / weightLeft)));
+      take = Math.min(take, remaining - (slotsLeft - 1));
+      out.push(parts.slice(j, j + take).join("\n\n"));
+      j += take;
+    }
+    return out;
   }
 
-  // If fewer parts than slots: distribute proportionally by original char length
   var weights = originals.map(function(s){ return Math.max(1, String(s).replace(/\s+/g,"").length); });
-  return splitTextByWeights(text.replace(/\n+/g," "), weights);
+  return splitTextByWeights(text.replace(/\n+/g, " "), weights);
 }
 
 function replaceDocxParagraphTexts(xmlStr, newTexts){
@@ -278,14 +286,16 @@ function replaceDocxParagraphTexts(xmlStr, newTexts){
   });
 }
 
-async function makeStyledDocxBlobFromTemplate(templateDocxB64, translatedText){
+async function makeStyledDocxBlobFromTemplate(templateDocxB64, translatedText, originalSegments){
   if(!window.JSZip) throw new Error("DOCX support not loaded");
   var bytes = base64ToUint8Array(templateDocxB64);
   var zip = await JSZip.loadAsync(bytes);
   var docFile = zip.file("word/document.xml");
   if(!docFile) throw new Error("DOCX template missing document.xml");
   var xmlStr = await docFile.async("string");
-  var originals = collectDocxParagraphTexts(xmlStr);
+  var originals = (originalSegments && originalSegments.length)
+    ? originalSegments
+    : collectDocxParagraphTexts(xmlStr);
   var slots = alignTranslatedParagraphs(translatedText, originals);
   zip.file("word/document.xml", replaceDocxParagraphTexts(xmlStr, slots));
   var out = await zip.generateAsync({ type:"uint8array", compression:"DEFLATE", compressionOptions:{ level:6 } });
@@ -334,145 +344,55 @@ function splitTextByWeights(text, weights){
   return result;
 }
 
-function groupPdfLines(items){
-  if(!items||!items.length) return [];
-  // Sort top-to-bottom, left-to-right
-  var sorted = items.slice().sort(function(a,b){ return (b.y-a.y)||(a.x-b.x); });
-
-  // First pass: group into visual lines (items with similar y)
-  var lines = [];
-  for(var i=0;i<sorted.length;i++){
-    var it = sorted[i];
-    var last = lines[lines.length-1];
-    var tol = Math.max(2, (it.fontSize||11)*0.45);
-    if(last && Math.abs(last.avgY - it.y) <= tol){
-      last.items.push(it);
-      last.avgY = last.items.reduce(function(s,x){ return s+x.y; },0)/last.items.length;
-    } else {
-      lines.push({ avgY: it.y, items:[it] });
-    }
+function drawPdfSlotText(page, font, text, slot){
+  var safe = winAnsiSafe(String(text||"").trim());
+  var fontSize = slot.fontSize || 11;
+  var pad = 4;
+  var blockX = Math.max(0, slot.x - pad);
+  var maxW = Math.max(30, (slot.x2 - slot.x) || 200);
+  var topY = slot.topY || slot.y2 || slot.y;
+  var minH = fontSize * 1.5;
+  if(!safe){
+    page.drawRectangle({ x:blockX, y:topY - minH - pad, width:maxW + pad*2, height:minH + pad*2, color:PDFLib.rgb(1,1,1) });
+    return;
   }
-
-  // Convert lines to normalised line objects
-  var normLines = lines.map(function(line){
-    var its = line.items.slice().sort(function(a,b){ return a.x-b.x; });
-    var fontSize = its.reduce(function(s,i){ return s+i.fontSize; },0)/its.length;
-    return {
-      x: Math.min.apply(null, its.map(function(i){ return i.x; })),
-      y: Math.min.apply(null, its.map(function(i){ return i.y; })),
-      x2: Math.max.apply(null, its.map(function(i){ return i.x+(i.width||0); })),
-      y2: Math.max.apply(null, its.map(function(i){ return i.y+(i.height||i.fontSize); })),
-      fontSize: fontSize,
-      text: its.map(function(i){ return i.str; }).join(" ").trim()
-    };
-  }).filter(function(l){ return l.text; });
-
-  // Second pass: cluster lines into paragraph blocks.
-  // Lines are in the same block when the vertical gap is <= 1.5x the line height.
-  var blocks = [];
-  for(var j=0;j<normLines.length;j++){
-    var ln = normLines[j];
-    var prev = blocks[blocks.length-1];
-    var lineH = ln.fontSize * 1.4;
-    if(prev){
-      var gap = prev.y - ln.y; // y decreases downward in PDF coords
-      if(gap > 0 && gap <= lineH * 1.8){
-        prev.lines.push(ln);
-        prev.y = ln.y;
-        prev.x = Math.min(prev.x, ln.x);
-        prev.x2 = Math.max(prev.x2, ln.x2);
-        prev.y2 = Math.max(prev.y2, ln.y2);
-        prev.text += " " + ln.text;
-        continue;
-      }
-    }
-    blocks.push({
-      x: ln.x, y: ln.y2, x2: ln.x2, y2: ln.y2,
-      topY: ln.y2,  // topmost y (highest on page = largest y in PDF)
-      fontSize: ln.fontSize,
-      lines: [ln],
-      text: ln.text
-    });
-  }
-  return blocks;
-}
-
-function drawPdfLineText(page, font, text, block){
-  var safe = winAnsiSafe(text);
-  // White-out the entire original block area
-  var pad = 2;
-  var blockX = block.x - pad;
-  var blockY = block.y - pad;
-  var blockW = Math.max(10, block.x2 - block.x) + pad*2;
-  var blockH = Math.max(block.fontSize, block.y2 - block.y) + pad*2;
-  page.drawRectangle({ x:blockX, y:blockY, width:blockW, height:blockH, color:PDFLib.rgb(1,1,1) });
-  if(!safe) return;
-
-  // Draw translated text line by line within the block width, starting from top
-  var fontSize = block.fontSize || 11;
-  var maxW = Math.max(20, block.x2 - block.x);
   var wrapped = wrapPdfLine(font, safe, fontSize, maxW);
-  // Start drawing from topY of the block (top line's baseline)
-  var startY = (block.lines && block.lines.length)
-    ? block.lines[0].y   // baseline of first original line
-    : block.topY || block.y2;
-  var y = startY;
+  var lineH = fontSize * 1.25;
+  var textH = wrapped.length * lineH;
+  var rectH = Math.max(minH, textH) + pad * 2;
+  page.drawRectangle({ x:blockX, y:topY - textH - pad, width:maxW + pad*2, height:rectH, color:PDFLib.rgb(1,1,1) });
+  var y = topY;
   for(var i=0;i<wrapped.length;i++){
     if(!wrapped[i]) continue;
-    // Shrink font if line is still too wide
     var sz = fontSize;
     while(sz > 5 && font.widthOfTextAtSize(wrapped[i], sz) > maxW) sz -= 0.25;
-    page.drawText(wrapped[i], { x:block.x, y:y, size:sz, font:font, color:PDFLib.rgb(0,0,0) });
-    y -= sz * 1.25;
+    page.drawText(wrapped[i], { x:slot.x, y:y, size:sz, font:font, color:PDFLib.rgb(0,0,0) });
+    y -= lineH;
   }
 }
 
-async function makeStyledPdfBlobFromTemplate(templatePdfB64, translatedText){
+async function makeStyledPdfBlobFromTemplate(templatePdfB64, translatedText, originalSegments){
   if(!window.pdfjsLib || !window.PDFLib) throw new Error("PDF support not loaded");
+  if(!window.LcDocExtract || !LcDocExtract.extractPdfReplaceLayout) throw new Error("Document parser not loaded");
   var bytes = base64ToUint8Array(templatePdfB64);
-  var pdfDoc = await PDFLib.PDFDocument.load(bytes);
-  var font = await pdfDoc.embedFont(PDFLib.StandardFonts.Helvetica);
-  var src = await pdfjsLib.getDocument({ data: bytes.slice(), isEvalSupported: false, disableFontFace: true }).promise;
-  var pageLayouts = [];
-  for(var i=1;i<=src.numPages;i++){
-    var page = await src.getPage(i);
-    var content = await page.getTextContent();
-    var items = [];
-    for(var k=0;k<content.items.length;k++){
-      var it = content.items[k];
-      if(!it.str || !String(it.str).trim()) continue;
-      var t = it.transform || [1,0,0,1,0,0];
-      var fontSize = Math.max(5, Math.min(72, Math.hypot(t[0],t[1]) || 11));
-      items.push({
-        str: it.str,
-        x: t[4], y: t[5],
-        width: it.width || fontSize * String(it.str).length * 0.5,
-        height: it.height || fontSize,
-        fontSize: fontSize
-      });
-    }
-    var blocks = groupPdfLines(items);
-    pageLayouts.push({
-      blocks: blocks,
-      text: blocks.map(function(b){ return b.text; }).join(" ")
-    });
-  }
-  if(!pageLayouts.some(function(p){ return p.blocks.length; })){
+  var layout = await LcDocExtract.extractPdfReplaceLayout(bytes);
+  if(!layout.pages.some(function(p){ return p.slots && p.slots.length; })){
     throw new Error("Could not read the original PDF layout");
   }
-  // Distribute translated text across pages proportional to original text length
-  var pageWeights = pageLayouts.map(function(p){ return Math.max(1, String(p.text||"").replace(/\s+/g,"").length); });
-  var pageChunks = splitTextByWeights(translatedText, pageWeights);
+  var originals = (originalSegments && originalSegments.length)
+    ? originalSegments
+    : layout.segments;
+  var transParts = alignTranslatedParagraphs(translatedText, originals);
+  var pdfDoc = await PDFLib.PDFDocument.load(bytes);
+  var font = await pdfDoc.embedFont(PDFLib.StandardFonts.Helvetica);
   var pages = pdfDoc.getPages();
-  pageLayouts.forEach(function(layout, pageIndex){
+  var slotIdx = 0;
+  layout.pages.forEach(function(pageLayout, pageIndex){
     var page = pages[pageIndex];
-    if(!page || !layout.blocks.length) return;
-    var pageText = pageChunks[pageIndex] || "";
-    // Distribute translated text across blocks proportional to original block text length
-    var blockWeights = layout.blocks.map(function(b){ return Math.max(1, String(b.text||"").replace(/\s+/g,"").length); });
-    var blockChunks = splitTextByWeights(pageText, blockWeights);
-    layout.blocks.forEach(function(block, bi){
-      drawPdfLineText(page, font, blockChunks[bi] || "", block);
+    if(!page || !pageLayout.slots) return;
+    pageLayout.slots.forEach(function(slot){
+      drawPdfSlotText(page, font, transParts[slotIdx] || "", slot);
+      slotIdx += 1;
     });
   });
   var out = await pdfDoc.save();
@@ -561,6 +481,8 @@ function ClientView({clientId}){
   const[showFullDraft,setShowFullDraft]=useState(false);
   const fileRef=useRef();
   const sourceFileB64Ref=useRef(null);
+  const textSegmentsRef=useRef([]);
+  const sentencePackRef=useRef(null);
   const deliveryTokenRef=useRef("");
   const turnstileRef=useRef();
   const turnstileWidget=useRef(null);
@@ -698,11 +620,29 @@ function ClientView({clientId}){
     };
   }
 
+  function buildSentencePackFromInput(){
+    const TS = window.LcTextSegments;
+    if(!TS) return null;
+    const segments = textSegmentsRef.current.length
+      ? TS.normalizeDocumentSegments(textSegmentsRef.current)
+      : TS.normalizeDocumentSegments(inputText.trim());
+    if(!segments.length) return null;
+    return TS.buildSentenceUnits(segments);
+  }
+
   async function handleTranslate(){
     if(!inputText.trim()){setError("Please enter some text first.");return;}
     setError("");setStage("translating");
     try{
-      const payload=()=>({text:inputText.trim(),language,...botFields()});
+      const pack = buildSentencePackFromInput();
+      sentencePackRef.current = pack;
+      const payload=()=>({
+        text: inputText.trim(),
+        language,
+        sentences: pack ? pack.sentences : undefined,
+        sentenceParaMap: pack ? pack.paraMap : undefined,
+        ...botFields()
+      });
       if(!challengeRef.current) await refreshChallenge();
       let data;
       try{
@@ -714,7 +654,20 @@ function ClientView({clientId}){
           data=await apiFetch("/api/translate",{method:"POST",body:JSON.stringify(payload())});
         }else throw first;
       }
-      setAiResult(data.translation);setStage("translated");setShowFullDraft(false);
+      setAiResult(data.translation);
+      if(
+        pack &&
+        Array.isArray(data.translationSentences) &&
+        data.translationSentences.length === pack.sentences.length
+      ){
+        sentencePackRef.current = {
+          ...pack,
+          translationSentences: data.translationSentences
+        };
+      } else if(pack) {
+        sentencePackRef.current = { ...pack, translationSentences: null };
+      }
+      setStage("translated");setShowFullDraft(false);
       refreshChallenge();
     }catch(e){setError("Translation failed: "+e.message);setStage("idle");refreshChallenge();}
   }
@@ -732,10 +685,24 @@ function ClientView({clientId}){
       const ext = sourceFile?.ext || "txt";
       const name = sourceFile?.name || `translation.${ext}`;
       const qaOnly = extra.qaOnly === true || useOwnAi;
+      const pack = qaOnly ? null : (sentencePackRef.current || buildSentencePackFromInput());
       const j=await apiFetch("/api/jobs",{method:"POST",body:JSON.stringify({
         clientId,
         clientEmail: email,
-        originalText: qaOnly ? "" : inputText.trim(),
+        originalText: qaOnly ? "" : (textSegmentsRef.current.length ? textSegmentsRef.current.join("\n\n") : inputText.trim()),
+        originalSegments: qaOnly
+          ? null
+          : (window.LcTextSegments
+            ? LcTextSegments.normalizeDocumentSegments(
+                (textSegmentsRef.current && textSegmentsRef.current.length)
+                  ? textSegmentsRef.current
+                  : inputText.trim())
+            : ((textSegmentsRef.current && textSegmentsRef.current.length)
+              ? textSegmentsRef.current
+              : inputText.trim().split(/\n{2,}/).map(s => s.trim()).filter(Boolean))),
+        sourceSentences: qaOnly ? null : (pack ? pack.sentences : null),
+        translationSentences: qaOnly ? null : (pack?.translationSentences || null),
+        sentenceParaMap: qaOnly ? null : (pack ? pack.paraMap : null),
         language,
         aiTranslation: qaOnly ? inputText.trim() : aiResult,
         qaOnly,
@@ -764,7 +731,7 @@ function ClientView({clientId}){
 
   function handleReset(){
     setStage("idle");setInputText("");setAiResult("");setCurrentJob(null);setError("");setSourceFile(null);setFileScan(null);setUseOwnAi(false);setShowFullDraft(false);
-    sourceFileB64Ref.current=null;
+    sourceFileB64Ref.current=null;textSegmentsRef.current=[];sentencePackRef.current=null;
     deliveryTokenRef.current="";
     try{ localStorage.removeItem("lc_open_job"); }catch{}
     if(location.search) history.replaceState({}, "", location.pathname);
@@ -779,13 +746,20 @@ function ClientView({clientId}){
     setFileScan(null);
     setSourceFile(null);
     sourceFileB64Ref.current=null;
+    textSegmentsRef.current=[];
+    sentencePackRef.current=null;
     if(fileRef.current) fileRef.current.value="";
   }
 
-  function applyExtractedText(raw, file, sourceExt, baseReason){
+  function applyExtractedText(raw, segments, file, sourceExt, baseReason){
     const DX = window.LcDocExtract;
-    const text = DX ? DX.truncateExtractedText(raw) : String(raw||"").slice(0, 25000);
+    const TS = window.LcTextSegments;
+    const segs = TS
+      ? TS.normalizeDocumentSegments((Array.isArray(segments) && segments.length) ? segments : raw)
+      : (Array.isArray(segments) && segments.length ? segments : String(raw||"").split(/\n{2,}/).map(s => s.trim()).filter(Boolean));
+    const text = DX ? DX.truncateExtractedText(TS ? TS.segmentsToDisplayText(segs) : segs.join("\n\n")) : String(raw||"").slice(0, 25000);
     const truncated = String(raw||"").length > text.length;
+    textSegmentsRef.current = segs;
     setInputText(text);
     setFileScan({
       name: file.name,
@@ -797,7 +771,7 @@ function ClientView({clientId}){
 
   async function handleFile(e){
     const file=e.target.files[0];if(!file)return;
-    setError("");setFileScan(null);setSourceFile(null);sourceFileB64Ref.current=null;
+    setError("");setFileScan(null);setSourceFile(null);sourceFileB64Ref.current=null;textSegmentsRef.current=[];sentencePackRef.current=null;
     const name=(file.name||"").toLowerCase();
     const max=10*1024*1024;
     if(file.size>max){setError("File too large (max 10 MB).");return;}
@@ -809,8 +783,8 @@ function ClientView({clientId}){
         const reader=new FileReader();
         reader.onload=ev=>{
           const raw=String(ev.target.result||"");
-          const text=DX.extractPlainText(raw);
-          applyExtractedText(text, file, name.endsWith(".md")?"md":"txt", "Text file");
+          const parsed=DX.extractPlainText(raw);
+          applyExtractedText(parsed.text, parsed.segments, file, name.endsWith(".md")?"md":"txt", "Text file");
           setFileBusy(false);
         };
         reader.onerror=()=>{setError("Could not read file.");setFileBusy(false);};
@@ -828,7 +802,7 @@ function ClientView({clientId}){
         const reason = r.hasImages
           ? "Text extracted; images will be kept on download."
           : "PDF text extracted";
-        applyExtractedText(r.text, file, "pdf", reason);
+        applyExtractedText(r.text, r.segments, file, "pdf", reason);
         const fileB64=arrayBufferToBase64(buf);
         sourceFileB64Ref.current=fileB64;
         setSourceFile(prev=>({...prev, fileB64}));
@@ -850,7 +824,7 @@ function ClientView({clientId}){
         const reason = (r.hasImages||r.hasDrawing)
           ? "Text extracted; images will be kept on download."
           : "Word text extracted";
-        applyExtractedText(r.text, file, "docx", reason);
+        applyExtractedText(r.text, r.segments, file, "docx", reason);
         const fileB64=arrayBufferToBase64(buf);
         sourceFileB64Ref.current=fileB64;
         setSourceFile(prev=>({...prev, fileB64}));
@@ -887,14 +861,15 @@ function ClientView({clientId}){
     if(ext==="txt"||ext==="md"){
       return downloadBlob(new Blob([text],{type:"text/plain;charset=utf-8"}), finalName);
     }
+    const segments = currentJob.originalSegments || null;
     const fileB64 = await getSourceFileB64(meta);
     if(!fileB64) throw new Error("Original file is unavailable. Open the link from your email and try again.");
     if(ext==="docx"){
-      const blob = await makeStyledDocxBlobFromTemplate(fileB64, text);
+      const blob = await makeStyledDocxBlobFromTemplate(fileB64, text, segments);
       return downloadBlob(blob, finalName);
     }
     if(ext==="pdf"){
-      const blob = await makeStyledPdfBlobFromTemplate(fileB64, text);
+      const blob = await makeStyledPdfBlobFromTemplate(fileB64, text, segments);
       return downloadBlob(blob, finalName);
     }
     return downloadBlob(new Blob([text],{type:"text/plain;charset=utf-8"}), `${baseName}-translated.txt`);
