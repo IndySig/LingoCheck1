@@ -17,7 +17,7 @@ const PASSWORD_MIN_LENGTH = 12;
 
 const PAYOUT_PER_WORD_CENTS = 2.5;
 const MAX_JSON_BODY = 1024 * 1024;
-const MAX_JOB_BODY = 6 * 1024 * 1024;
+const MAX_JOB_BODY = 16 * 1024 * 1024;
 const MAX_TRANSLATE_BODY = 128 * 1024;
 
 function loadAuthConfig() {

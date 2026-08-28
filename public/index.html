@@ -833,8 +833,8 @@ function ClientView({clientId}){
     const file=e.target.files[0];if(!file)return;
     setError("");setFileScan(null);setSourceFile(null);sourceFileB64Ref.current=null;
     const name=(file.name||"").toLowerCase();
-    const max=4*1024*1024;
-    if(file.size>max){setError("File too large (max 4 MB).");return;}
+    const max=10*1024*1024;
+    if(file.size>max){setError("File too large (max 10 MB).");return;}
     setFileBusy(true);
     try{
       if(name.endsWith(".txt")||name.endsWith(".md")){
@@ -1025,7 +1025,7 @@ function ClientView({clientId}){
           e("div",{style:{display:"flex",alignItems:"center",gap:10,marginBottom:20,flexWrap:"wrap"}},
             e("input",{ref:fileRef,type:"file",accept:".txt,.md,.pdf,.docx",style:{display:"none"},onChange:handleFile}),
             e("button",{disabled:fileBusy,onClick:()=>fileRef.current.click(),style:{...st.btn,background:"transparent",border:`1px dashed ${C.border}`,color:C.muted,padding:"8px 14px",fontSize:12}},fileBusy?"Scanning…":"Upload file"),
-            e("span",{style:{fontSize:11,color:C.muted}},".txt, .docx, .pdf · max 4 MB · up to 25,000 characters")
+            e("span",{style:{fontSize:11,color:C.muted}},".txt, .docx, .pdf · max 10 MB · up to 25,000 characters")
           ),
           fileScan&&e("div",{style:{fontSize:12,marginBottom:12,color:fileScan.fit?C.green:C.error,background:fileScan.fit?C.greenBg:"#fdf2f2",border:`1px solid ${fileScan.fit?C.greenBorder:"rgba(196,61,61,0.22)"}`,borderRadius:10,padding:"10px 12px"}},
             e("div",{style:{fontWeight:600,marginBottom:4}},fileScan.fit?(useOwnAi?"File is fit for review":"File is fit for translation"):(useOwnAi?"File is not fit for review":"File is not fit for translation")),
