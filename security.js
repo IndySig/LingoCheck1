@@ -6,7 +6,7 @@ const path = require('path');
 const { spawnSync } = require('child_process');
 
 const ALLOWED_LANGUAGES = Object.freeze(['Dutch', 'Spanish', 'German']);
-const MAX_TEXT_CHARS = 4000;
+const MAX_TEXT_CHARS = 25000;
 const MAX_CLIENT_ID_LEN = 64;
 const MAX_FILENAME_LEN = 180;
 const MAX_FILE_BYTES = 4 * 1024 * 1024;

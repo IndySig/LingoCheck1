@@ -839,7 +839,14 @@ function ClientView({clientId}){
     try{
       if(name.endsWith(".txt")||name.endsWith(".md")){
         const reader=new FileReader();
-        reader.onload=ev=>{setInputText(ev.target.result||"");setFileScan({name:file.name,fit:true,reason:"Text file"});setSourceFile({name:file.name,ext:name.endsWith(".md")?"md":"txt"});setFileBusy(false);};
+        reader.onload=ev=>{
+          const raw=String(ev.target.result||"");
+          const text=raw.length>25000?raw.slice(0,25000):raw;
+          setInputText(text);
+          setFileScan({name:file.name,fit:true,reason:raw.length>25000?"Text file (truncated to 25,000 characters)":"Text file"});
+          setSourceFile({name:file.name,ext:name.endsWith(".md")?"md":"txt"});
+          setFileBusy(false);
+        };
         reader.onerror=()=>{setError("Could not read file.");setFileBusy(false);};
         reader.readAsText(file);
         return;
@@ -855,8 +862,8 @@ function ClientView({clientId}){
         const reason = r.hasImages
           ? "Text extracted; images will be kept on download."
           : "PDF text extracted";
-        setInputText(r.text);
-        setFileScan({name:file.name,fit:true,reason});
+        setInputText(r.text.length > 25000 ? r.text.slice(0, 25000) : r.text);
+        setFileScan({name:file.name,fit:true,reason: r.text.length > 25000 ? reason + " (truncated to 25,000 characters)" : reason});
         const fileB64=arrayBufferToBase64(buf);
         sourceFileB64Ref.current=fileB64;
         setSourceFile({name:file.name,ext:"pdf",fileB64});
@@ -878,8 +885,8 @@ function ClientView({clientId}){
         const reason = (r.hasImages||r.hasDrawing)
           ? "Text extracted; images will be kept on download."
           : "Word text extracted";
-        setInputText(r.text);
-        setFileScan({name:file.name,fit:true,reason});
+        setInputText(r.text.length > 25000 ? r.text.slice(0, 25000) : r.text);
+        setFileScan({name:file.name,fit:true,reason: r.text.length > 25000 ? reason + " (truncated to 25,000 characters)" : reason});
         const fileB64=arrayBufferToBase64(buf);
         sourceFileB64Ref.current=fileB64;
         setSourceFile({name:file.name,ext:"docx",fileB64});
@@ -1012,13 +1019,13 @@ function ClientView({clientId}){
               )
             ),
           e("div",{style:{position:"relative",marginBottom:14}},
-            e("textarea",{style:{...st.ta,minHeight:sourceFile?88:(isWide?220:160),maxHeight:sourceFile?140:(isWide?280:220),overflow:"auto"},placeholder:useOwnAi?'Paste the translation here…':"Paste your text here… e.g. \"We are looking for a reliable translation partner.\"",value:inputText,onChange:ev=>{setInputText(ev.target.value);if(fileScan&&fileScan.fit===false)setFileScan(null);},maxLength:4000}),
+            e("textarea",{style:{...st.ta,minHeight:sourceFile?88:(isWide?220:160),maxHeight:sourceFile?140:(isWide?280:220),overflow:"auto"},placeholder:useOwnAi?'Paste the translation here…':"Paste your text here… e.g. \"We are looking for a reliable translation partner.\"",value:inputText,onChange:ev=>{setInputText(ev.target.value);if(fileScan&&fileScan.fit===false)setFileScan(null);},maxLength:25000}),
             e("span",{style:{position:"absolute",bottom:10,right:12,fontSize:11,color:C.muted}},words," words")
           ),
           e("div",{style:{display:"flex",alignItems:"center",gap:10,marginBottom:20,flexWrap:"wrap"}},
             e("input",{ref:fileRef,type:"file",accept:".txt,.md,.pdf,.docx",style:{display:"none"},onChange:handleFile}),
             e("button",{disabled:fileBusy,onClick:()=>fileRef.current.click(),style:{...st.btn,background:"transparent",border:`1px dashed ${C.border}`,color:C.muted,padding:"8px 14px",fontSize:12}},fileBusy?"Scanning…":"Upload file"),
-            e("span",{style:{fontSize:11,color:C.muted}},".txt, .docx, .pdf · max 4 MB")
+            e("span",{style:{fontSize:11,color:C.muted}},".txt, .docx, .pdf · max 4 MB · up to 25,000 characters")
           ),
           fileScan&&e("div",{style:{fontSize:12,marginBottom:12,color:fileScan.fit?C.green:C.error,background:fileScan.fit?C.greenBg:"#fdf2f2",border:`1px solid ${fileScan.fit?C.greenBorder:"rgba(196,61,61,0.22)"}`,borderRadius:10,padding:"10px 12px"}},
             e("div",{style:{fontWeight:600,marginBottom:4}},fileScan.fit?(useOwnAi?"File is fit for review":"File is fit for translation"):(useOwnAi?"File is not fit for review":"File is not fit for translation")),

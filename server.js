@@ -18,7 +18,7 @@ const PASSWORD_MIN_LENGTH = 12;
 const PAYOUT_PER_WORD_CENTS = 2.5;
 const MAX_JSON_BODY = 1024 * 1024;
 const MAX_JOB_BODY = 6 * 1024 * 1024;
-const MAX_TRANSLATE_BODY = 32 * 1024;
+const MAX_TRANSLATE_BODY = 128 * 1024;
 
 function loadAuthConfig() {
   // Used for SESSION_SECRET (required) and an optional legacy admin login.
@@ -815,7 +815,7 @@ async function handleTranslate(req, res) {
       },
       body: JSON.stringify({
         model: 'claude-sonnet-4-6',
-        max_tokens: 4096,
+        max_tokens: 8192,
         system: `You are a professional translation engine. Translate the user's English text to ${language}. Return ONLY the translated text — no explanations, no quotes, no preamble.`,
         messages: [{ role: 'user', content: text }]
       })
@@ -827,7 +827,7 @@ async function handleTranslate(req, res) {
       return sendJson(res, 502, { error: 'Translation service unavailable' });
     }
 
-    const translation = security.sanitizeText(data.content?.[0]?.text || '', 8000);
+    const translation = security.sanitizeText(data.content?.[0]?.text || '', security.MAX_TEXT_CHARS);
     return sendJson(res, 200, { translation });
   } catch (e) {
     console.error('[LingoCheck] Translation failed:', e?.message || e);
@@ -882,7 +882,7 @@ async function handleRevisorPatch(req, res, id, session) {
   }
   const body = await readBodyJson(req);
   const revised = typeof body.revisedTranslation === 'string'
-    ? security.sanitizeText(body.revisedTranslation, 8000)
+    ? security.sanitizeText(body.revisedTranslation, security.MAX_TEXT_CHARS)
     : job.revisedTranslation;
   const merged = { ...job, revisedTranslation: revised };
   const completing = body.status === 'complete' && job.status !== 'complete';
