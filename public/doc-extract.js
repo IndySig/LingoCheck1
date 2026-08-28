@@ -174,6 +174,15 @@
 
   async function toArrayBuffer(fileOrBuf) {
     if (fileOrBuf instanceof ArrayBuffer) return fileOrBuf;
+    if (ArrayBuffer.isView(fileOrBuf)) {
+      return fileOrBuf.buffer.slice(
+        fileOrBuf.byteOffset,
+        fileOrBuf.byteOffset + fileOrBuf.byteLength
+      );
+    }
+    if (fileOrBuf && typeof fileOrBuf.arrayBuffer === "function") {
+      return fileOrBuf.arrayBuffer();
+    }
     return new Promise((resolve, reject) => {
       const r = new FileReader();
       r.onload = () => resolve(r.result);

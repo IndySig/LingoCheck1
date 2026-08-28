@@ -865,12 +865,23 @@ function ClientView({clientId}){
     const fileB64 = await getSourceFileB64(meta);
     if(!fileB64) throw new Error("Original file is unavailable. Open the link from your email and try again.");
     if(ext==="docx"){
-      const blob = await makeStyledDocxBlobFromTemplate(fileB64, text, segments);
-      return downloadBlob(blob, finalName);
+      try{
+        const blob = await makeStyledDocxBlobFromTemplate(fileB64, text, segments);
+        return downloadBlob(blob, finalName);
+      }catch(err){
+        console.warn("Styled DOCX download failed, falling back to plain text:", err);
+        return downloadBlob(new Blob([text],{type:"text/plain;charset=utf-8"}), `${baseName}-translated.txt`);
+      }
     }
     if(ext==="pdf"){
-      const blob = await makeStyledPdfBlobFromTemplate(fileB64, text, segments);
-      return downloadBlob(blob, finalName);
+      try{
+        const blob = await makeStyledPdfBlobFromTemplate(fileB64, text, segments);
+        return downloadBlob(blob, finalName);
+      }catch(err){
+        console.warn("Styled PDF download failed, falling back to plain PDF:", err);
+        const blob = await makePdfBlobFromText(text);
+        return downloadBlob(blob, finalName);
+      }
     }
     return downloadBlob(new Blob([text],{type:"text/plain;charset=utf-8"}), `${baseName}-translated.txt`);
   }
