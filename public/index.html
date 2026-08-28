@@ -377,26 +377,62 @@ async function makeStyledPdfBlobFromTemplate(templatePdfB64, translatedText, ori
   var bytes = base64ToUint8Array(templatePdfB64);
   var layout = await LcDocExtract.extractPdfReplaceLayout(bytes);
   if(!layout.pages.some(function(p){ return p.slots && p.slots.length; })){
-    throw new Error("Could not read the original PDF layout");
+    return { blob: await makePdfBlobFromText(translatedText), mode: "clean", reason: "no layout" };
   }
+
+  var assessment = LcDocExtract.assessPdfLayoutPreserve
+    ? LcDocExtract.assessPdfLayoutPreserve(layout)
+    : { viable: false, reason: "complex layout" };
+  if(!assessment.viable){
+    return { blob: await makePdfBlobFromText(translatedText), mode: "clean", reason: assessment.reason || "complex layout" };
+  }
+
+  var slotTexts = (layout.slotTexts && layout.slotTexts.length)
+    ? layout.slotTexts
+    : layout.pages.flatMap(function(p){ return (p.slots || []).map(function(s){ return s.text; }); });
   var originals = (originalSegments && originalSegments.length)
     ? originalSegments
-    : layout.segments;
+    : (layout.segments && layout.segments.length ? layout.segments : slotTexts);
   var transParts = alignTranslatedParagraphs(translatedText, originals);
   var pdfDoc = await PDFLib.PDFDocument.load(bytes);
   var font = await pdfDoc.embedFont(PDFLib.StandardFonts.Helvetica);
   var pages = pdfDoc.getPages();
-  var slotIdx = 0;
-  layout.pages.forEach(function(pageLayout, pageIndex){
-    var page = pages[pageIndex];
-    if(!page || !pageLayout.slots) return;
-    pageLayout.slots.forEach(function(slot){
-      drawPdfSlotText(page, font, transParts[slotIdx] || "", slot);
-      slotIdx += 1;
+  var allSlots = layout.pages.flatMap(function(p){ return p.slots || []; });
+
+  if(originals.length !== slotTexts.length && LcDocExtract.assignPdfSlotsToSegments){
+    var groups = LcDocExtract.assignPdfSlotsToSegments(allSlots, originals);
+    var pageStarts = [];
+    var offset = 0;
+    layout.pages.forEach(function(pageLayout){
+      pageStarts.push(offset);
+      offset += (pageLayout.slots || []).length;
     });
-  });
+    groups.forEach(function(group, segIndex){
+      if(!group.length) return;
+      var slotPos = allSlots.indexOf(group[0]);
+      var pageIndex = 0;
+      for(var pi = pageStarts.length - 1; pi >= 0; pi--){
+        if(slotPos >= pageStarts[pi]){ pageIndex = pi; break; }
+      }
+      var page = pages[pageIndex];
+      if(!page) return;
+      var bounds = LcDocExtract.mergePdfSlotBounds(group);
+      if(bounds) drawPdfSlotText(page, font, transParts[segIndex] || "", bounds);
+    });
+  }else{
+    var slotIdx = 0;
+    layout.pages.forEach(function(pageLayout, pageIndex){
+      var page = pages[pageIndex];
+      if(!page || !pageLayout.slots) return;
+      pageLayout.slots.forEach(function(slot){
+        drawPdfSlotText(page, font, transParts[slotIdx] || "", slot);
+        slotIdx += 1;
+      });
+    });
+  }
+
   var out = await pdfDoc.save();
-  return new Blob([out], { type: "application/pdf" });
+  return { blob: new Blob([out], { type: "application/pdf" }), mode: "layout" };
 }
 
 async function makePdfBlobFromText(text){
@@ -479,6 +515,7 @@ function ClientView({clientId}){
   const[useOwnAi,setUseOwnAi]=useState(false);
   const[clientEmail,setClientEmail]=useState(()=>savedEmail());
   const[showFullDraft,setShowFullDraft]=useState(false);
+  const[downloadNote,setDownloadNote]=useState("");
   const fileRef=useRef();
   const sourceFileB64Ref=useRef(null);
   const textSegmentsRef=useRef([]);
@@ -853,6 +890,7 @@ function ClientView({clientId}){
   }
 
   async function downloadTranslated(){
+    setDownloadNote("");
     const meta = currentJob.sourceFile || { name:"translation.txt", ext:"txt" };
     const baseName = (meta.name||"translation").replace(/\.[^.]+$/,"");
     const ext = (meta.ext||"txt").toLowerCase();
@@ -870,15 +908,21 @@ function ClientView({clientId}){
         return downloadBlob(blob, finalName);
       }catch(err){
         console.warn("Styled DOCX download failed, falling back to plain text:", err);
+        setDownloadNote("Word layout could not be preserved; downloaded as plain text instead.");
         return downloadBlob(new Blob([text],{type:"text/plain;charset=utf-8"}), `${baseName}-translated.txt`);
       }
     }
     if(ext==="pdf"){
       try{
-        const blob = await makeStyledPdfBlobFromTemplate(fileB64, text, segments);
+        const result = await makeStyledPdfBlobFromTemplate(fileB64, text, segments);
+        const blob = result && result.blob ? result.blob : result;
+        if(result && result.mode === "clean"){
+          setDownloadNote("This manual has a complex layout (columns, diagrams, side notes). Downloaded as a clean readable PDF. Diagrams and original formatting are not included — use your original file alongside this translation.");
+        }
         return downloadBlob(blob, finalName);
       }catch(err){
         console.warn("Styled PDF download failed, falling back to plain PDF:", err);
+        setDownloadNote("Layout could not be preserved; downloaded as a clean readable PDF instead.");
         const blob = await makePdfBlobFromText(text);
         return downloadBlob(blob, finalName);
       }
@@ -1099,6 +1143,7 @@ function ClientView({clientId}){
             catch(err){ setError("Could not download file: "+(err.message||"Unknown error")); }
           },style:{...st.btn,background:C.soft,border:`1px solid ${C.border}`,color:C.muted,padding:"8px 16px",fontSize:12}},"Download translated file")
         ),
+        downloadNote&&e("div",{style:{fontSize:12,color:C.muted,lineHeight:1.55,marginTop:12,padding:"10px 12px",background:C.soft,border:`1px solid ${C.border}`,borderRadius:10}},downloadNote),
         error&&e("div",{style:{fontSize:12,color:C.error,marginTop:12}},error)
       ),
       e("button",{onClick:handleReset,style:{...st.btn,background:"transparent",border:`1px solid ${C.border}`,color:C.muted,padding:"8px 16px",fontSize:12}},"← Translate another document")

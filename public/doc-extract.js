@@ -486,7 +486,77 @@
       pages.push({ slots });
       for (const slot of slots) segments.push(slot.text);
     }
-    return { pages, segments: global.LcTextSegments ? global.LcTextSegments.normalizeDocumentSegments(segments) : segments };
+    return { pages, segments: global.LcTextSegments ? global.LcTextSegments.normalizeDocumentSegments(segments) : segments, slotTexts: segments };
+  }
+
+  function assessPdfLayoutPreserve(layout) {
+    const pages = layout && layout.pages ? layout.pages : [];
+    const allSlots = pages.flatMap((p) => p.slots || []);
+    if (!allSlots.length) return { viable: false, reason: "no text regions" };
+
+    const maxPerPage = Math.max(...pages.map((p) => (p.slots || []).length), 0);
+    if (maxPerPage > 18 || allSlots.length > 120) {
+      return { viable: false, reason: "too many text regions" };
+    }
+
+    const widths = allSlots.map((s) => Math.max(0, (s.x2 || 0) - (s.x || 0)));
+    const narrowCount = widths.filter((w) => w < 90).length;
+    if (narrowCount > allSlots.length * 0.3) {
+      return { viable: false, reason: "narrow or multi-column regions" };
+    }
+
+    for (const page of pages) {
+      const slots = page.slots || [];
+      if (slots.length < 5) continue;
+      const left = slots.filter((s) => s.x < 180).length;
+      const right = slots.filter((s) => s.x > 260).length;
+      if (left >= 3 && right >= 3) {
+        return { viable: false, reason: "multi-column page" };
+      }
+    }
+
+    const slotTexts = layout.slotTexts || allSlots.map((s) => s.text);
+    const normCount = (layout.segments || []).length;
+    if (normCount > 0 && slotTexts.length > normCount * 1.35) {
+      return { viable: false, reason: "segment mismatch" };
+    }
+
+    return { viable: true };
+  }
+
+  function assignPdfSlotsToSegments(slots, segmentTexts) {
+    const groups = [];
+    let slotIdx = 0;
+    const targets = (segmentTexts || []).map((t) => String(t || "").replace(/\s+/g, ""));
+    for (let i = 0; i < targets.length; i++) {
+      const chunk = [];
+      let acc = 0;
+      const targetLen = Math.max(1, targets[i].length);
+      while (slotIdx < slots.length) {
+        chunk.push(slots[slotIdx]);
+        acc += String(slots[slotIdx].text || "").replace(/\s+/g, "").length;
+        slotIdx += 1;
+        if (acc >= targetLen * 0.55 || chunk.length >= 12) break;
+      }
+      groups.push(chunk);
+    }
+    if (slotIdx < slots.length) {
+      if (groups.length) groups[groups.length - 1].push(...slots.slice(slotIdx));
+      else groups.push(slots.slice(slotIdx));
+    }
+    return groups;
+  }
+
+  function mergePdfSlotBounds(slots) {
+    if (!slots.length) return null;
+    return {
+      x: Math.min(...slots.map((s) => s.x || 0)),
+      x2: Math.max(...slots.map((s) => s.x2 || 0)),
+      y: Math.min(...slots.map((s) => s.y || 0)),
+      y2: Math.max(...slots.map((s) => s.y2 || 0)),
+      topY: Math.max(...slots.map((s) => s.topY || s.y2 || s.y || 0)),
+      fontSize: Math.max(...slots.map((s) => s.fontSize || 11)),
+    };
   }
 
   function xmlLocalName(el) {
@@ -676,6 +746,9 @@
   global.LcDocExtract = {
     extractPdfText,
     extractPdfReplaceLayout,
+    assessPdfLayoutPreserve,
+    assignPdfSlotsToSegments,
+    mergePdfSlotBounds,
     extractDocxText,
     extractPlainText,
     truncateExtractedText,
