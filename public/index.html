@@ -986,35 +986,50 @@ function ClientView({clientId}){
               [badge(ico("M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2","M9 11a4 4 0 1 0 0-8 4 4 0 0 0 0 8","M16 11l2 2 4-4")),"Human revisor","A certified translator checks every word"],
               [badge(ico("M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4","M7 10l5 5 5-5","M12 15V3")),"Delivered","Download the finished file"]
             ];
-            const chevron=e("svg",{width:16,height:16,viewBox:"0 0 16 16","aria-hidden":"true",focusable:"false",style:{flexShrink:0,display:"block",color:C.accent}},
+            const flowLabel=e("div",{style:{fontSize:11,fontWeight:600,letterSpacing:"1.1px",textTransform:"uppercase",color:C.accent,marginBottom:isCompact?12:10}},"How it works");
+            const stepNum=(n)=>e("div",{"aria-hidden":"true",style:{width:isCompact?28:24,height:isCompact?28:24,borderRadius:"50%",flexShrink:0,display:"flex",alignItems:"center",justifyContent:"center",background:"#ffffff",border:`2px solid ${C.accent}`,color:C.accent,fontSize:12,fontWeight:700,lineHeight:1,zIndex:1}},n);
+            const chevron=e("svg",{width:16,height:16,viewBox:"0 0 16 16","aria-hidden":"true",focusable:"false",style:{flexShrink:0,display:"block",color:C.accent,opacity:0.85}},
               e("path",{d:"M6 3.5 L11.5 8 L6 12.5",fill:"none",stroke:"currentColor",strokeWidth:1.7,strokeLinecap:"round",strokeLinejoin:"round"})
             );
-            const items=[];
-            if(isCompact){
+
+            if(isCompact || !isWide){
+              const timeline=[];
               steps.forEach(([icon,lbl,sub],i)=>{
-                items.push(e("div",{key:"s"+i,role:"listitem",style:{display:"flex",alignItems:"flex-start",gap:10,padding:"8px 0",borderTop:i?`1px solid ${C.border}`:"none"}},
-                  icon,
-                  e("div",{style:{minWidth:0}},
-                    e("div",{style:{fontSize:12,fontWeight:600,color:C.text,marginBottom:2}},lbl),
-                    e("div",{style:{fontSize:11,color:C.muted,lineHeight:1.4}},sub)
+                timeline.push(e("div",{key:"s"+i,role:"listitem",style:{display:"flex",gap:12,alignItems:"stretch",position:"relative"}},
+                  e("div",{style:{display:"flex",flexDirection:"column",alignItems:"center",width:28,flexShrink:0}},
+                    stepNum(i+1),
+                    i<steps.length-1&&e("div",{"aria-hidden":"true",style:{width:2,flex:1,minHeight:18,marginTop:6,background:"linear-gradient(180deg, rgba(109,79,216,0.45), rgba(109,79,216,0.12))",borderRadius:2}})
+                  ),
+                  e("div",{style:{flex:1,paddingBottom:i<steps.length-1?16:0}},
+                    e("div",{style:{display:"flex",alignItems:"center",gap:8,marginBottom:4}},
+                      icon,
+                      e("div",{style:{fontSize:13,fontWeight:600,color:C.text}},lbl)
+                    ),
+                    e("div",{style:{fontSize:12,color:C.muted,lineHeight:1.45,paddingLeft:40}},sub)
                   )
                 ));
               });
-            }else{
+              return e("div",{role:"list","aria-label":"How LingoCheck works",style:{background:C.soft,border:`1px solid ${C.border}`,borderRadius:12,padding:"14px 16px",marginBottom:18,pointerEvents:"none",userSelect:"none"}},flowLabel,...timeline);
+            }
+
+            const items=[];
             steps.forEach(([icon,lbl,sub],i)=>{
-              items.push(e("div",{key:"s"+i,role:"listitem",style:{display:"flex",alignItems:"center",gap:8,minWidth:0,flex:isWide?"1 1 0":"1 1 auto",padding:isWide?"2px 4px":"2px 0"}},
+              items.push(e("div",{key:"s"+i,role:"listitem",style:{display:"flex",flexDirection:"column",alignItems:"center",gap:8,minWidth:0,flex:"1 1 0",padding:"2px 4px",textAlign:"center"}},
+                stepNum(i+1),
                 icon,
                 e("div",{style:{minWidth:0}},
                   e("div",{style:{fontSize:11,fontWeight:600,color:C.text,letterSpacing:"0.3px",whiteSpace:"nowrap"}},lbl),
-                  e("div",{style:{fontSize:11,color:C.muted,lineHeight:1.35}},sub)
+                  e("div",{style:{fontSize:11,color:C.muted,lineHeight:1.35,marginTop:2}},sub)
                 )
               ));
               if(i<steps.length-1){
-                items.push(e("div",{key:"a"+i,"aria-hidden":"true",style:{display:"flex",alignItems:"center",justifyContent:"center",flex:"0 0 auto",padding:isWide?"0 2px":"0 6px",opacity:0.85}},chevron));
+                items.push(e("div",{key:"a"+i,"aria-hidden":"true",style:{display:"flex",alignItems:"center",justifyContent:"center",flex:"0 0 auto",padding:"0 2px",alignSelf:"center",marginTop:12}},chevron));
               }
             });
-            }
-            return e("div",{role:"list","aria-label":"How LingoCheck works",style:{display:"flex",flexDirection:isCompact?"column":"row",flexWrap:isWide?"nowrap":"wrap",alignItems:isCompact?"stretch":"center",gap:isCompact?0:(isWide?4:8),background:C.soft,border:`1px solid ${C.border}`,borderRadius:12,padding:isCompact?"8px 14px":"12px 14px",marginBottom:isWide?0:18,pointerEvents:"none",userSelect:"none",maxWidth:isWide?640:"100%"}},...items);
+            return e("div",{role:"list","aria-label":"How LingoCheck works",style:{background:C.soft,border:`1px solid ${C.border}`,borderRadius:12,padding:"12px 14px",marginBottom:0,pointerEvents:"none",userSelect:"none",maxWidth:640}},
+              flowLabel,
+              e("div",{style:{display:"flex",flexDirection:"row",alignItems:"flex-start",gap:4,width:"100%"}},...items)
+            );
           })()
         ),
 
