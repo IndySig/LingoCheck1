@@ -39,6 +39,9 @@
   ::placeholder{color:#9a93ad;}
   ::-webkit-scrollbar{width:6px;}
   ::-webkit-scrollbar-thumb{background:rgba(109,79,216,0.22);border-radius:3px;}
+  @media (max-width: 767px){
+    body{overflow-x:hidden;}
+  }
 </style>
 </head>
 <body>
@@ -58,6 +61,23 @@ const st={
 async function apiFetch(path,opts={}){const r=await fetch(path,{headers:{"Content-Type":"application/json"},...opts});const data=await r.json().catch(()=> ({}));if(!r.ok){throw new Error(data.error||"Request failed");}return data;}
 
 function Spinner({size=18}){return React.createElement("span",{style:{display:"inline-block",width:size,height:size,border:"2px solid rgba(109,79,216,0.18)",borderTopColor:C.accent,borderRadius:"50%",animation:"spin 0.55s linear infinite",verticalAlign:"middle"}});}
+
+function useMedia(query){
+  const [matches,setMatches]=useState(()=>window.matchMedia?window.matchMedia(query).matches:false);
+  useEffect(()=>{
+    if(!window.matchMedia) return;
+    const mq=window.matchMedia(query);
+    const onChange=()=>setMatches(mq.matches);
+    onChange();
+    if(mq.addEventListener) mq.addEventListener("change",onChange);
+    else mq.addListener(onChange);
+    return()=>{
+      if(mq.removeEventListener) mq.removeEventListener("change",onChange);
+      else mq.removeListener(onChange);
+    };
+  },[query]);
+  return matches;
+}
 
 function coalesceShortSegments(segments){
   const src = (segments || []).map(s => String(s || "").trim()).filter(Boolean);
@@ -279,30 +299,30 @@ function RevisorApp(){
   return React.createElement(RevisorView,{me,allJobs,tab,setTab,updateJob,claimJob,onLogout:logout});
 }
 
-function Header({me,tab,setTab,onLogout,counts}){
+function Header({me,tab,setTab,onLogout,counts,isCompact}){
   const e=React.createElement;
   function tabBtn(id,label,badge){
     const active=tab===id;
-    return e("button",{onClick:()=>setTab(id),style:{...st.btn,padding:"8px 14px",fontSize:13,background:active?"rgba(109,79,216,0.10)":"transparent",border:`1px solid ${active?"rgba(109,79,216,0.28)":C.border}`,color:active?C.accent:C.muted,display:"inline-flex",alignItems:"center",gap:8}},
+    return e("button",{onClick:()=>setTab(id),style:{...st.btn,padding:isCompact?"8px 10px":"8px 14px",fontSize:12,background:active?"rgba(109,79,216,0.10)":"transparent",border:`1px solid ${active?"rgba(109,79,216,0.28)":C.border}`,color:active?C.accent:C.muted,display:"inline-flex",alignItems:"center",gap:6,flex:isCompact?"1 1 calc(50% - 4px)":"0 0 auto",justifyContent:"center"}},
       label,
       typeof badge==="number"&&badge>0&&e("span",{style:{fontSize:11,fontWeight:600,background:active?"rgba(109,79,216,0.14)":C.soft,borderRadius:999,padding:"1px 8px",color:active?C.accent:C.text}},badge)
     );
   }
-  return e("div",{style:{display:"flex",alignItems:"center",justifyContent:"space-between",padding:"28px 0 24px",borderBottom:`1px solid ${C.border}`,marginBottom:28,gap:16,flexWrap:"wrap"}},
+  return e("div",{style:{display:"flex",alignItems:isCompact?"stretch":"center",justifyContent:"space-between",padding:isCompact?"20px 0 18px":"28px 0 24px",borderBottom:`1px solid ${C.border}`,marginBottom:isCompact?20:28,gap:14,flexDirection:isCompact?"column":"row"}},
     e("div",null,
-      e("div",{style:{fontFamily:"inherit",fontSize:24,fontWeight:600,color:C.text}},"Lingo",e("span",{style:{color:C.accent}},"Check")),
-      e("div",{style:{fontSize:12,color:C.muted,marginTop:2}},"Revisor Panel · ",e("span",{style:{color:C.accent}},me.displayName||me.email||me.username))
+      e("div",{style:{fontFamily:"inherit",fontSize:isCompact?20:24,fontWeight:600,color:C.text}},"Lingo",e("span",{style:{color:C.accent}},"Check")),
+      e("div",{style:{fontSize:12,color:C.muted,marginTop:2,wordBreak:"break-word"}},"Revisor Panel · ",e("span",{style:{color:C.accent}},me.displayName||me.email||me.username))
     ),
-    e("div",{style:{display:"flex",alignItems:"center",gap:8,flexWrap:"wrap"}},
+    e("div",{style:{display:"flex",alignItems:"center",gap:isCompact?8:8,flexWrap:"wrap",width:isCompact?"100%":"auto"}},
       tabBtn("queue","Queue",counts.queue),
-      tabBtn("mine","My assignments",counts.mine),
+      tabBtn("mine","My jobs",counts.mine),
       tabBtn("finance","Finance"),
-      e("button",{onClick:onLogout,style:{...st.btn,background:"transparent",border:`1px solid ${C.border}`,color:C.muted,fontSize:12,padding:"8px 14px"}},"Logout")
+      e("button",{onClick:onLogout,style:{...st.btn,background:"transparent",border:`1px solid ${C.border}`,color:C.muted,fontSize:12,padding:"8px 14px",flex:isCompact?"1 1 100%":"0 0 auto"}},isCompact?"Log out":"Logout")
     )
   );
 }
 
-function QueueTab({me,allJobs,claimJob,setTab}){
+function QueueTab({me,allJobs,claimJob,setTab,isCompact}){
   const e=React.createElement;
   const [claimingId,setClaimingId]=useState(null);
   const [err,setErr]=useState("");
@@ -341,7 +361,7 @@ function QueueTab({me,allJobs,claimJob,setTab}){
     e("span",{style:st.label},"Available jobs · claim to start working"),
     err&&e("div",{style:{margin:"0 0 12px",fontSize:12,color:"#c43d3d"}},err),
     e("div",{style:{display:"grid",gridTemplateColumns:"1fr",gap:12}},
-      queue.map(job=>e("div",{key:job.id,style:{...st.card,padding:18,animation:"fadeUp 0.25s ease",display:"grid",gridTemplateColumns:"1fr auto",gap:16,alignItems:"center"}},
+      queue.map(job=>e("div",{key:job.id,style:{...st.card,padding:isCompact?16:18,animation:"fadeUp 0.25s ease",display:"grid",gridTemplateColumns:isCompact?"1fr":"1fr auto",gap:16,alignItems:isCompact?"stretch":"center"}},
         e("div",null,
           e("div",{style:{fontSize:13,fontWeight:600,color:C.text,marginBottom:6}},
             job.qaOnly?job.language:"EN → "+job.language,
@@ -351,7 +371,7 @@ function QueueTab({me,allJobs,claimJob,setTab}){
           e("div",{style:{fontSize:12,color:C.muted,lineHeight:1.6,maxHeight:60,overflow:"hidden"}},(job.qaOnly?job.aiTranslation:job.originalText||"").substring(0,260),(job.qaOnly?job.aiTranslation:job.originalText||"").length>260?"…":""),
           e("div",{style:{fontSize:11,color:C.muted,marginTop:8}},"Submitted ",formatDateTime(job.createdAt))
         ),
-        e("button",{onClick:()=>onClaim(job.id),disabled:claimingId===job.id,style:{...st.btn,padding:"12px 18px",background:C.accent,color:C.white,fontSize:13,whiteSpace:"nowrap"}},
+        e("button",{onClick:()=>onClaim(job.id),disabled:claimingId===job.id,style:{...st.btn,padding:"12px 18px",background:C.accent,color:C.white,fontSize:13,whiteSpace:"nowrap",width:isCompact?"100%":"auto"}},
           claimingId===job.id?e(React.Fragment,null,e(Spinner,{size:14})," Claiming…"):"Claim job"
         )
       ))
@@ -359,7 +379,7 @@ function QueueTab({me,allJobs,claimJob,setTab}){
   );
 }
 
-function ReviewEditor({selectedJob,updateJob,onDone}){
+function ReviewEditor({selectedJob,updateJob,onDone,isCompact}){
   const e=React.createElement;
   const[editedText,setEditedText]=useState(selectedJob.revisedTranslation||selectedJob.aiTranslation||"");
   const[mode,setMode]=useState("sentences");
@@ -369,6 +389,7 @@ function ReviewEditor({selectedJob,updateJob,onDone}){
   const[paragraphCount,setParagraphCount]=useState(0);
   const[sending,setSending]=useState(false);
   const[isWide,setIsWide]=useState(()=>window.matchMedia && window.matchMedia("(min-width: 900px)").matches);
+  const isCompact=!useMedia("(min-width: 768px)");
 
   useEffect(()=>{
     if(!window.matchMedia) return;
@@ -415,16 +436,16 @@ function ReviewEditor({selectedJob,updateJob,onDone}){
     }
   }
 
-  const paneHeight = isWide ? 420 : undefined;
+  const paneHeight = isWide ? 420 : (isCompact ? 260 : 320);
 
   return e("div",{style:{animation:"fadeUp 0.25s ease"}},
     e("span",{style:st.label},selectedJob.qaOnly?"Proofread client translation":"Review & edit translation"),
     selectedJob.qaOnly&&e("div",{style:{background:C.amberBg,border:`1px solid ${C.amberBorder}`,borderRadius:10,padding:"10px 14px",marginBottom:12,fontSize:12,color:C.amber,lineHeight:1.55}},"This client submitted their own AI translation. There is no English source — proofread the text below."),
     e("div",{style:{display:"flex",alignItems:"center",justifyContent:"space-between",margin:"0 0 10px",flexWrap:"wrap",gap:10}},
-      e("div",{style:{fontSize:12,color:C.muted}},"Mode:"),
-      e("div",{style:{display:"flex",gap:8}},
-        e("button",{onClick:()=>setMode("full"),style:{...st.btn,background:mode==="full"?"rgba(109,79,216,0.10)":"transparent",border:`1px solid ${mode==="full"?"rgba(109,79,216,0.28)":C.border}`,color:mode==="full"?C.accent:C.muted,fontSize:12,padding:"6px 10px"}},"Full text"),
-        e("button",{onClick:()=>setMode("sentences"),style:{...st.btn,background:mode==="sentences"?"rgba(109,79,216,0.10)":"transparent",border:`1px solid ${mode==="sentences"?"rgba(109,79,216,0.28)":C.border}`,color:mode==="sentences"?C.accent:C.muted,fontSize:12,padding:"6px 10px"}},"Sentence-by-sentence")
+      e("div",{style:{fontSize:12,color:C.muted,flex:isCompact?"1 1 100%":"0 0 auto"}},"Mode:"),
+      e("div",{style:{display:"flex",gap:8,flex:isCompact?"1 1 100%":"0 0 auto"}},
+        e("button",{onClick:()=>setMode("full"),style:{...st.btn,background:mode==="full"?"rgba(109,79,216,0.10)":"transparent",border:`1px solid ${mode==="full"?"rgba(109,79,216,0.28)":C.border}`,color:mode==="full"?C.accent:C.muted,fontSize:12,padding:"6px 10px",flex:isCompact?1:"0 0 auto"}},"Full text"),
+        e("button",{onClick:()=>setMode("sentences"),style:{...st.btn,background:mode==="sentences"?"rgba(109,79,216,0.10)":"transparent",border:`1px solid ${mode==="sentences"?"rgba(109,79,216,0.28)":C.border}`,color:mode==="sentences"?C.accent:C.muted,fontSize:12,padding:"6px 10px",flex:isCompact?1:"0 0 auto"}},"Sentence-by-sentence")
       )
     ),
     mode==="full"
@@ -465,8 +486,9 @@ function ReviewEditor({selectedJob,updateJob,onDone}){
   );
 }
 
-function MyAssignmentsTab({me,allJobs,updateJob}){
+function MyAssignmentsTab({me,allJobs,updateJob,isCompact}){
   const e=React.createElement;
+  const isWide=useMedia("(min-width: 900px)");
   const[selectedId,setSelectedId]=useState(null);
   const[justSent,setJustSent]=useState(false);
   const[showList,setShowList]=useState(true);
@@ -521,7 +543,7 @@ function MyAssignmentsTab({me,allJobs,updateJob}){
     );
   }
 
-  return e("div",{style:{display:"grid",gridTemplateColumns:(selectedJob&&!showList)?"1fr":(selectedJob?"260px 1fr":"1fr"),gap:16,alignItems:"start"}},
+  return e("div",{style:{display:"grid",gridTemplateColumns:(selectedJob&&!showList)?"1fr":(selectedJob&&isWide?"260px 1fr":"1fr"),gap:16,alignItems:"start"}},
     (showList||!selectedJob)&&e("div",null,
       e("div",{style:{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:8}},
         e("span",{style:st.label},"My assignments"),
@@ -536,18 +558,18 @@ function MyAssignmentsTab({me,allJobs,updateJob}){
       ? e("div",null,
           justSent&&selectedJob.status==="complete"&&e("div",{style:{background:C.greenBg,border:`1px solid ${C.greenBorder}`,borderRadius:10,padding:"12px 16px",marginBottom:14,fontSize:13,color:C.green,animation:"fadeUp 0.25s ease"}},"✅ Translation sent to client successfully."),
           selectedJob.status==="complete"
-            ? e("div",{style:{...st.card}},
-                e("div",{style:{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:14}},
-                  e("div",{style:{fontFamily:"inherit",fontSize:22,color:C.text}},"Completed assignment"),
+            ? e("div",{style:{...st.card,padding:isCompact?18:28}},
+                e("div",{style:{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:14,flexWrap:"wrap",gap:8}},
+                  e("div",{style:{fontFamily:"inherit",fontSize:isCompact?18:22,color:C.text}},"Completed assignment"),
                   e("span",{style:{fontSize:11,fontWeight:600,padding:"4px 10px",borderRadius:999,background:C.greenBg,border:`1px solid ${C.greenBorder}`,color:C.green}},"DELIVERED")
                 ),
-                e("div",{style:{display:"grid",gridTemplateColumns:"1fr 1fr",gap:12,marginBottom:18}},
+                e("div",{style:{display:"grid",gridTemplateColumns:isCompact?"1fr":"1fr 1fr",gap:12,marginBottom:18}},
                   e("div",null,e("div",{style:{fontSize:11,color:C.muted,letterSpacing:"1px",textTransform:"uppercase"}},"Language"),e("div",{style:{fontSize:14,color:C.text,marginTop:4}}, selectedJob.qaOnly?selectedJob.language:"EN → "+selectedJob.language)),
                   e("div",null,e("div",{style:{fontSize:11,color:C.muted,letterSpacing:"1px",textTransform:"uppercase"}},"Words"),e("div",{style:{fontSize:14,color:C.text,marginTop:4}}, selectedJob.sourceWordCount||0)),
                   e("div",null,e("div",{style:{fontSize:11,color:C.muted,letterSpacing:"1px",textTransform:"uppercase"}},"Claimed"),e("div",{style:{fontSize:14,color:C.text,marginTop:4}}, formatDateTime(selectedJob.claimedAt))),
                   e("div",null,e("div",{style:{fontSize:11,color:C.muted,letterSpacing:"1px",textTransform:"uppercase"}},"Completed"),e("div",{style:{fontSize:14,color:C.text,marginTop:4}}, formatDateTime(selectedJob.completedAt)))
                 ),
-                e("div",{style:{display:"grid",gridTemplateColumns:selectedJob.qaOnly?"1fr":"1fr 1fr",gap:14}},
+                e("div",{style:{display:"grid",gridTemplateColumns:(selectedJob.qaOnly||!isWide)?"1fr":"1fr 1fr",gap:14}},
                   !selectedJob.qaOnly&&e("div",null,
                     e("div",{style:{fontSize:11,color:C.muted,letterSpacing:"1px",textTransform:"uppercase",marginBottom:8}},"Original"),
                     e("div",{style:{fontSize:13,color:C.muted,lineHeight:1.75,whiteSpace:"pre-wrap",maxHeight:300,overflow:"auto",padding:12,border:`1px solid ${C.border}`,borderRadius:10,background:C.soft}},selectedJob.originalText)
@@ -558,13 +580,13 @@ function MyAssignmentsTab({me,allJobs,updateJob}){
                   )
                 )
               )
-            : e(ReviewEditor,{selectedJob,updateJob,onDone:()=>{setJustSent(true); setTimeout(()=>setJustSent(false),3500);}})
+            : e(ReviewEditor,{selectedJob,updateJob,onDone:()=>{setJustSent(true); setTimeout(()=>setJustSent(false),3500);},isCompact})
         )
       : (!showList && e("div",{style:st.muted},"Select an assignment to open it."))
   );
 }
 
-function FinanceTab({me,allJobs}){
+function FinanceTab({me,allJobs,isCompact}){
   const e=React.createElement;
   const RATE = 2.5;
 
@@ -630,11 +652,11 @@ function FinanceTab({me,allJobs}){
               e("div",{style:{fontFamily:"inherit",fontSize:22,color:C.pale}}, fmtEur(g.cents))
             ),
             e("div",{style:{padding:"4px 0"}},
-              g.items.map((it,i)=>e("div",{key:it.id,style:{display:"grid",gridTemplateColumns:"1fr 120px 100px 110px",gap:8,padding:"10px 20px",borderTop:i===0?"none":`1px solid ${C.border}`,fontSize:13,alignItems:"center"}},
+              g.items.map((it,i)=>e("div",{key:it.id,style:{display:"grid",gridTemplateColumns:isCompact?"1fr":"1fr 120px 100px 110px",gap:isCompact?4:8,padding:isCompact?"12px 16px":"10px 20px",borderTop:i===0?"none":`1px solid ${C.border}`,fontSize:13,alignItems:isCompact?"start":"center"}},
                 e("div",{style:{color:C.text}},"EN → ",it.language),
                 e("div",{style:{color:C.muted,fontSize:12}}, it.sourceWordCount," words"),
                 e("div",{style:{color:C.muted,fontSize:12}}, new Date(it.completedAt).toLocaleDateString()),
-                e("div",{style:{color:C.pale,textAlign:"right",fontWeight:600}}, fmtEur(it.earningsCents))
+                e("div",{style:{color:C.pale,textAlign:isCompact?"left":"right",fontWeight:600}}, fmtEur(it.earningsCents))
               ))
             )
           ))
@@ -644,17 +666,18 @@ function FinanceTab({me,allJobs}){
 
 function RevisorView({me,allJobs,tab,setTab,updateJob,claimJob,onLogout}){
   const e=React.createElement;
+  const isCompact=!useMedia("(min-width: 768px)");
 
   const counts = {
     queue: allJobs.filter(j=>j.status==="awaiting_review" && !j.claimedByRevisorId).length,
     mine: allJobs.filter(j=>(j.claimedByRevisorId===me.revisorId || j.completedByRevisorId===me.revisorId) && j.status!=="complete").length
   };
 
-  return e("div",{style:{maxWidth:1280,margin:"0 auto",padding:"0 20px"}},
-    e(Header,{me,tab,setTab,onLogout,counts}),
-    tab==="queue" && e(QueueTab,{me,allJobs,claimJob,setTab}),
-    tab==="mine" && e(MyAssignmentsTab,{me,allJobs,updateJob}),
-    tab==="finance" && e(FinanceTab,{me,allJobs})
+  return e("div",{style:{maxWidth:1280,margin:"0 auto",padding:isCompact?"0 16px":"0 20px"}},
+    e(Header,{me,tab,setTab,onLogout,counts,isCompact}),
+    tab==="queue" && e(QueueTab,{me,allJobs,claimJob,setTab,isCompact}),
+    tab==="mine" && e(MyAssignmentsTab,{me,allJobs,updateJob,isCompact}),
+    tab==="finance" && e(FinanceTab,{me,allJobs,isCompact})
   );
 }
 

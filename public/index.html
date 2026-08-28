@@ -49,6 +49,9 @@
   ::-webkit-scrollbar{width:6px;}
   ::-webkit-scrollbar-thumb{background:rgba(109,79,216,0.22);border-radius:3px;}
   .hp{position:absolute;left:-10000px;top:auto;width:1px;height:1px;overflow:hidden;}
+  @media (max-width: 767px){
+    body{overflow-x:hidden;}
+  }
 </style>
 </head>
 <body>
@@ -106,6 +109,23 @@ function honeypotValue(){
 }
 
 function Spinner({size=18}){return React.createElement("span",{style:{display:"inline-block",width:size,height:size,border:"2px solid rgba(109,79,216,0.18)",borderTopColor:C.accent,borderRadius:"50%",animation:"spin 0.55s linear infinite",verticalAlign:"middle"}});}
+
+function useMedia(query){
+  const [matches,setMatches]=useState(()=>window.matchMedia?window.matchMedia(query).matches:false);
+  useEffect(()=>{
+    if(!window.matchMedia) return;
+    const mq=window.matchMedia(query);
+    const onChange=()=>setMatches(mq.matches);
+    onChange();
+    if(mq.addEventListener) mq.addEventListener("change",onChange);
+    else mq.addListener(onChange);
+    return()=>{
+      if(mq.removeEventListener) mq.removeEventListener("change",onChange);
+      else mq.removeListener(onChange);
+    };
+  },[query]);
+  return matches;
+}
 
 async function fileToArrayBuffer(file){
   return new Promise((resolve,reject)=>{const r=new FileReader();r.onload=()=>resolve(r.result);r.onerror=reject;r.readAsArrayBuffer(file);});
@@ -511,6 +531,10 @@ function ClientView({clientId}){
   const[fileBusy,setFileBusy]=useState(false);
   const[sourceFile,setSourceFile]=useState(null); // {name, ext, fileB64?}
   const[isWide,setIsWide]=useState(()=>window.matchMedia && window.matchMedia("(min-width: 980px)").matches);
+  const isCompact=!useMedia("(min-width: 768px)");
+  const pagePad=isCompact?"20px 16px 0":"40px 22px 0";
+  const cardPad=isCompact?18:28;
+  const cardStyle=(extra={})=>({...st.card,padding:cardPad,...extra});
   const[turnstileSiteKey,setTurnstileSiteKey]=useState(null);
   const[useOwnAi,setUseOwnAi]=useState(false);
   const[clientEmail,setClientEmail]=useState(()=>savedEmail());
@@ -933,22 +957,22 @@ function ClientView({clientId}){
   const e=React.createElement;
 
   const header=e("nav",{style:{position:"sticky",top:0,zIndex:40,background:"#ffffff",borderBottom:`1px solid ${C.border}`}},
-    e("div",{style:{maxWidth:1240,margin:"0 auto",padding:"12px 22px",display:"flex",alignItems:"center",justifyContent:"space-between",gap:16}},
-      e("div",{style:{display:"flex",alignItems:"center",gap:14,minWidth:0}},
-        e("div",{style:{fontFamily:"inherit",fontSize:22,fontWeight:600,color:C.text,lineHeight:1}},"Lingo",e("span",{style:{color:C.accent}},"Check")),
-        e("span",{"aria-hidden":"true",style:{width:1,height:16,background:"rgba(92,70,168,0.22)",flexShrink:0}}),
-        e("span",{style:{fontSize:13,fontWeight:500,color:C.muted,whiteSpace:"nowrap"}},"Client Portal")
+    e("div",{style:{maxWidth:1240,margin:"0 auto",padding:isCompact?"12px 16px":"12px 22px",display:"flex",alignItems:isCompact?"stretch":"center",justifyContent:"space-between",gap:isCompact?10:16,flexDirection:isCompact?"column":"row"}},
+      e("div",{style:{display:"flex",alignItems:"center",gap:isCompact?10:14,minWidth:0}},
+        e("div",{style:{fontFamily:"inherit",fontSize:isCompact?20:22,fontWeight:600,color:C.text,lineHeight:1}},"Lingo",e("span",{style:{color:C.accent}},"Check")),
+        !isCompact&&e("span",{"aria-hidden":"true",style:{width:1,height:16,background:"rgba(92,70,168,0.22)",flexShrink:0}}),
+        !isCompact&&e("span",{style:{fontSize:13,fontWeight:500,color:C.muted,whiteSpace:"nowrap"}},"Client Portal")
       ),
-      e("a",{href:"/revisor",style:{fontFamily:"Manrope, system-ui, sans-serif",fontSize:13,fontWeight:600,color:C.accent,textDecoration:"none",border:`1px solid rgba(109,79,216,0.32)`,background:"transparent",padding:"8px 14px",borderRadius:10,whiteSpace:"nowrap",lineHeight:1.2}},"Reviewer Portal")
+      e("a",{href:"/revisor",style:{fontFamily:"Manrope, system-ui, sans-serif",fontSize:13,fontWeight:600,color:C.accent,textDecoration:"none",border:`1px solid rgba(109,79,216,0.32)`,background:"transparent",padding:"8px 14px",borderRadius:10,whiteSpace:"nowrap",lineHeight:1.2,textAlign:"center",alignSelf:isCompact?"stretch":"auto"}},"Reviewer Portal")
     )
   );
 
-  return e(React.Fragment,null,header,e("div",{style:{maxWidth:1240,margin:"0 auto",padding:"40px 22px 0"}},
+  return e(React.Fragment,null,header,e("div",{style:{maxWidth:1240,margin:"0 auto",padding:pagePad}},
 
     stage==="idle"&&e("div",{style:{animation:"fadeUp 0.25s ease"}},
       e("div",{style:{display:"grid",gridTemplateColumns:isWide?"1.08fr 0.92fr":"1fr",gap:28,alignItems:"start"}},
         e("div",null,
-          e("h1",{style:{fontFamily:"inherit",fontSize:isWide?46:40,fontWeight:400,lineHeight:1.12,color:C.text,marginBottom:14,maxWidth:isWide?640:560}},
+          e("h1",{style:{fontFamily:"inherit",fontSize:isCompact?32:(isWide?46:40),fontWeight:400,lineHeight:1.12,color:C.text,marginBottom:14,maxWidth:isWide?640:"100%"}},
             "Translation made ",e("em",{style:{fontStyle:"italic",color:C.accent}},"fast")," and reliable"),
           e("p",{style:{fontSize:15,color:C.muted,lineHeight:1.7,maxWidth:520,marginBottom:28}},"AI translates instantly. Our human revisor refines every word. Agency quality at a fraction of the cost."),
           (()=>{
@@ -966,6 +990,17 @@ function ClientView({clientId}){
               e("path",{d:"M6 3.5 L11.5 8 L6 12.5",fill:"none",stroke:"currentColor",strokeWidth:1.7,strokeLinecap:"round",strokeLinejoin:"round"})
             );
             const items=[];
+            if(isCompact){
+              steps.forEach(([icon,lbl,sub],i)=>{
+                items.push(e("div",{key:"s"+i,role:"listitem",style:{display:"flex",alignItems:"flex-start",gap:10,padding:"8px 0",borderTop:i?`1px solid ${C.border}`:"none"}},
+                  icon,
+                  e("div",{style:{minWidth:0}},
+                    e("div",{style:{fontSize:12,fontWeight:600,color:C.text,marginBottom:2}},lbl),
+                    e("div",{style:{fontSize:11,color:C.muted,lineHeight:1.4}},sub)
+                  )
+                ));
+              });
+            }else{
             steps.forEach(([icon,lbl,sub],i)=>{
               items.push(e("div",{key:"s"+i,role:"listitem",style:{display:"flex",alignItems:"center",gap:8,minWidth:0,flex:isWide?"1 1 0":"1 1 auto",padding:isWide?"2px 4px":"2px 0"}},
                 icon,
@@ -978,7 +1013,8 @@ function ClientView({clientId}){
                 items.push(e("div",{key:"a"+i,"aria-hidden":"true",style:{display:"flex",alignItems:"center",justifyContent:"center",flex:"0 0 auto",padding:isWide?"0 2px":"0 6px",opacity:0.85}},chevron));
               }
             });
-            return e("div",{role:"list","aria-label":"How LingoCheck works",style:{display:"flex",flexDirection:"row",flexWrap:isWide?"nowrap":"wrap",alignItems:"center",gap:isWide?4:8,background:C.soft,border:`1px solid ${C.border}`,borderRadius:12,padding:isWide?"12px 14px":"12px 14px",marginBottom:isWide?0:18,pointerEvents:"none",userSelect:"none",maxWidth:isWide?640:"100%"}},...items);
+            }
+            return e("div",{role:"list","aria-label":"How LingoCheck works",style:{display:"flex",flexDirection:isCompact?"column":"row",flexWrap:isWide?"nowrap":"wrap",alignItems:isCompact?"stretch":"center",gap:isCompact?0:(isWide?4:8),background:C.soft,border:`1px solid ${C.border}`,borderRadius:12,padding:isCompact?"8px 14px":"12px 14px",marginBottom:isWide?0:18,pointerEvents:"none",userSelect:"none",maxWidth:isWide?640:"100%"}},...items);
           })()
         ),
 
@@ -990,7 +1026,7 @@ function ClientView({clientId}){
               e("span",{style:{display:"block",fontSize:12,color:C.muted,lineHeight:1.45}},useOwnAi?"Quality check only — we will not generate a new translation.":"Leave unchecked to let LingoCheck translate first, then send to a revisor.")
             )
           ),
-        e("div",{style:{...st.card,border:useOwnAi?"1px solid rgba(109,79,216,0.28)":st.card.border}},
+        e("div",{style:{...cardStyle(),border:useOwnAi?"1px solid rgba(109,79,216,0.28)":st.card.border}},
           e("div",{style:{display:"flex",alignItems:"center",justifyContent:"space-between",gap:10,marginBottom:12,flexWrap:"wrap"}},
             e("span",{style:st.label},useOwnAi?"Your translation":"Your text"),
             useOwnAi&&e("span",{style:{fontSize:10,fontWeight:600,letterSpacing:"0.8px",textTransform:"uppercase",color:C.accent,background:"rgba(109,79,216,0.08)",border:"1px solid rgba(109,79,216,0.18)",padding:"4px 10px",borderRadius:999}},"QA only")
@@ -1016,10 +1052,10 @@ function ClientView({clientId}){
             e("textarea",{style:{...st.ta,minHeight:sourceFile?88:(isWide?220:160),maxHeight:sourceFile?140:(isWide?280:220),overflow:"auto"},placeholder:useOwnAi?'Paste the translation here…':"Paste your text here… e.g. \"We are looking for a reliable translation partner.\"",value:inputText,onChange:ev=>{setInputText(ev.target.value);if(fileScan&&fileScan.fit===false)setFileScan(null);},maxLength:25000}),
             e("span",{style:{position:"absolute",bottom:10,right:12,fontSize:11,color:C.muted}},words," words")
           ),
-          e("div",{style:{display:"flex",alignItems:"center",gap:10,marginBottom:20,flexWrap:"wrap"}},
+          e("div",{style:{display:"flex",alignItems:isCompact?"stretch":"center",gap:10,marginBottom:20,flexDirection:isCompact?"column":"row",flexWrap:"wrap"}},
             e("input",{ref:fileRef,type:"file",accept:".txt,.md,.pdf,.docx",style:{display:"none"},onChange:handleFile}),
-            e("button",{disabled:fileBusy,onClick:()=>fileRef.current.click(),style:{...st.btn,background:"transparent",border:`1px dashed ${C.border}`,color:C.muted,padding:"8px 14px",fontSize:12}},fileBusy?"Scanning…":"Upload file"),
-            e("span",{style:{fontSize:11,color:C.muted}},".txt, .docx, .pdf · max 10 MB · up to 25,000 characters")
+            e("button",{disabled:fileBusy,onClick:()=>fileRef.current.click(),style:{...st.btn,background:"transparent",border:`1px dashed ${C.border}`,color:C.muted,padding:"8px 14px",fontSize:12,width:isCompact?"100%":"auto"}},fileBusy?"Scanning…":"Upload file"),
+            e("span",{style:{fontSize:11,color:C.muted,lineHeight:1.45}},isCompact?".txt, .docx, .pdf · max 10 MB · 25k chars":".txt, .docx, .pdf · max 10 MB · up to 25,000 characters")
           ),
           fileScan&&e("div",{style:{fontSize:12,marginBottom:12,color:fileScan.fit?C.green:C.error,background:fileScan.fit?C.greenBg:"#fdf2f2",border:`1px solid ${fileScan.fit?C.greenBorder:"rgba(196,61,61,0.22)"}`,borderRadius:10,padding:"10px 12px"}},
             e("div",{style:{fontWeight:600,marginBottom:4}},fileScan.fit?(useOwnAi?"File is fit for review":"File is fit for translation"):(useOwnAi?"File is not fit for review":"File is not fit for translation")),
@@ -1039,19 +1075,19 @@ function ClientView({clientId}){
       )
     ),
 
-    stage==="translating"&&e("div",{style:{...st.card,textAlign:"center",padding:"64px 32px",animation:"fadeUp 0.25s ease"}},
+    stage==="translating"&&e("div",{style:{...cardStyle(),textAlign:"center",padding:isCompact?"48px 20px":"64px 32px",animation:"fadeUp 0.25s ease"}},
       e("div",{style:{marginBottom:20}},e(Spinner,{size:26})),
       e("div",{style:{fontFamily:"inherit",fontSize:24,color:C.text,marginBottom:8}},"AI is translating…"),
       e("div",{style:st.muted},"Processing your text with our language model")
     ),
 
     stage==="translated"&&e("div",{style:{animation:"fadeUp 0.25s ease"}},
-      e("div",{style:{...st.card,border:`1px solid rgba(109,79,216,0.28)`,marginBottom:16}},
+      e("div",{style:{...cardStyle(),border:`1px solid rgba(109,79,216,0.28)`,marginBottom:16}},
         e("div",{style:{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:12}},
           e("span",{style:st.label},"AI Translation — ",language),
           e("span",{style:{fontSize:11,background:"rgba(109,79,216,0.08)",border:"1px solid rgba(109,79,216,0.18)",color:C.accent,borderRadius:999,padding:"3px 10px"}},"AI draft")
         ),
-        e("div",{style:{display:"grid",gridTemplateColumns:"repeat(3,1fr)",gap:10,marginBottom:12}},
+        e("div",{style:{display:"grid",gridTemplateColumns:isCompact?"1fr":"repeat(3, 1fr)",gap:10,marginBottom:12}},
           [
             [words,"Words","Source word count"],
             [formatEuro(lingoPrice),"Your price","LingoCheck price for this job"],
@@ -1080,7 +1116,7 @@ function ClientView({clientId}){
         ),
         error&&e("div",{style:{fontSize:12,color:C.error,marginTop:12}},error)
       ),
-      e("div",{style:{...st.card,marginBottom:14}},
+      e("div",{style:{...cardStyle(),marginBottom:14}},
         e("div",{style:{display:"flex",alignItems:"center",justifyContent:"space-between",gap:10,marginBottom:showFullDraft?12:0}},
           e("span",{style:{...st.label,marginBottom:0}},"Document text"),
           e("button",{onClick:()=>setShowFullDraft(v=>!v),style:{...st.btn,background:"transparent",border:`1px solid ${C.border}`,color:C.muted,padding:"6px 12px",fontSize:12}},showFullDraft?"Hide text":"Show original and translation")
@@ -1101,9 +1137,9 @@ function ClientView({clientId}){
       e("button",{onClick:handleReset,style:{...st.btn,background:"transparent",border:`1px solid ${C.border}`,color:C.muted,padding:"8px 16px",fontSize:12}},"← Start over")
     ),
 
-    stage==="sent"&&e("div",{style:{...st.card,textAlign:"center",padding:"64px 32px",border:"1px solid rgba(109,79,216,0.22)",animation:"glow 2.4s ease-in-out infinite, fadeUp 0.25s ease"}},
+    stage==="sent"&&e("div",{style:{...cardStyle(),textAlign:"center",padding:isCompact?"48px 20px":"64px 32px",border:"1px solid rgba(109,79,216,0.22)",animation:"glow 2.4s ease-in-out infinite, fadeUp 0.25s ease"}},
       e("div",{style:{fontSize:42,marginBottom:18}},"👁"),
-      e("div",{style:{fontFamily:"inherit",fontSize:26,color:C.text,marginBottom:10}},currentJob?.qaOnly?"Awaiting quality check":"Awaiting revisor"),
+      e("div",{style:{fontFamily:"inherit",fontSize:isCompact?22:26,color:C.text,marginBottom:10}},currentJob?.qaOnly?"Awaiting quality check":"Awaiting revisor"),
       e("div",{style:{...st.muted,maxWidth:380,margin:"0 auto 28px",lineHeight:1.7}},
         currentJob?.qaOnly
           ?"Your translation has been sent to a certified translator for proofreading."
@@ -1130,18 +1166,18 @@ function ClientView({clientId}){
           )
         )
       ),
-      e("div",{style:{...st.card,border:`1px solid ${C.greenBorder}`,marginBottom:14}},
+      e("div",{style:{...cardStyle(),border:`1px solid ${C.greenBorder}`,marginBottom:14}},
         e("div",{style:{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:14}},
           e("span",{style:st.label},"Final Translation — ",currentJob.language),
           e("span",{style:{fontSize:11,background:C.greenBg,border:`1px solid ${C.greenBorder}`,color:C.green,borderRadius:20,padding:"3px 10px"}},"✓ Human reviewed")
         ),
         e("div",{style:{fontSize:14,lineHeight:1.8,color:C.text,whiteSpace:"pre-wrap",marginBottom:18}},currentJob.revisedTranslation),
         e("div",{style:{display:"flex",gap:10,flexWrap:"wrap"}},
-          e("button",{onClick:()=>navigator.clipboard.writeText(currentJob.revisedTranslation),style:{...st.btn,background:"transparent",border:`1px solid ${C.border}`,color:C.muted,padding:"8px 16px",fontSize:12}},"Copy translation"),
+          e("button",{onClick:()=>navigator.clipboard.writeText(currentJob.revisedTranslation),style:{...st.btn,background:"transparent",border:`1px solid ${C.border}`,color:C.muted,padding:"8px 16px",fontSize:12,flex:isCompact?"1 1 100%":"0 0 auto"}},isCompact?"Copy":"Copy translation"),
           e("button",{onClick:async()=>{
             try{ await downloadTranslated(); }
             catch(err){ setError("Could not download file: "+(err.message||"Unknown error")); }
-          },style:{...st.btn,background:C.soft,border:`1px solid ${C.border}`,color:C.muted,padding:"8px 16px",fontSize:12}},"Download translated file")
+          },style:{...st.btn,background:C.soft,border:`1px solid ${C.border}`,color:C.muted,padding:"8px 16px",fontSize:12,flex:isCompact?"1 1 100%":"0 0 auto"}},isCompact?"Download file":"Download translated file")
         ),
         downloadNote&&e("div",{style:{fontSize:12,color:C.muted,lineHeight:1.55,marginTop:12,padding:"10px 12px",background:C.soft,border:`1px solid ${C.border}`,borderRadius:10}},downloadNote),
         error&&e("div",{style:{fontSize:12,color:C.error,marginTop:12}},error)
