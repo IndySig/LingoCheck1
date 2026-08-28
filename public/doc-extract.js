@@ -110,7 +110,7 @@
         if (Math.abs(line.y - g.y) > yTol) continue;
         const last = line.glyphs[line.glyphs.length - 1];
         const xGap = g.x - (last.x + last.width);
-        const xTol = Math.max(line.fontSize * 1.8, 24);
+        const xTol = Math.max(line.fontSize * 2.8, 36);
         if (xGap > xTol) continue;
         line.glyphs.push(g);
         const n = line.glyphs.length;
@@ -160,17 +160,53 @@
   }
 
   function filterPdfLines(lines, pageWidth, pageHeight, medianSize) {
-    const footnoteZone = pageHeight * 0.12;
+    const footnoteZone = pageHeight * 0.1;
     return lines.filter((line) => {
       const text = lineGlyphsToText(line.glyphs, line.fontSize * 0.55);
       if (!text) return false;
       const lineW = line.x2 - line.x;
-      if (line.y < footnoteZone && line.fontSize < medianSize * 0.9) return false;
-      if (line.x < pageWidth * 0.02 && lineW < pageWidth * 0.22) return false;
-      if (line.x > pageWidth * 0.76 && lineW < pageWidth * 0.22) return false;
-      if (line.fontSize < medianSize * 0.75 && text.length < 70) return false;
+      // Only drop obvious footnotes: bottom strip, clearly smaller than body text
+      if (line.y < footnoteZone && line.fontSize < medianSize * 0.8 && text.length < 120) return false;
+      // Drop very narrow margin notes only when short
+      if (line.x < pageWidth * 0.01 && lineW < pageWidth * 0.15 && text.length < 50) return false;
+      if (line.x > pageWidth * 0.82 && lineW < pageWidth * 0.15 && text.length < 50) return false;
       return true;
     });
+  }
+
+  function linesToPlainText(lines) {
+    return lines
+      .map((l) => lineGlyphsToText(l.glyphs, l.fontSize * 0.55))
+      .filter(Boolean)
+      .join("\n");
+  }
+
+  async function extractPdfPageLayout(page, useFilter) {
+    const viewport = page.getViewport({ scale: 1 });
+    const content = await page.getTextContent();
+    const glyphs = [];
+    for (const item of content.items) {
+      if (item.str == null || item.str === "") continue;
+      glyphs.push(pdfItemToGlyph(item));
+    }
+    const lines = groupGlyphsIntoLines(glyphs);
+    if (!lines.length) return { blocks: [], plain: "" };
+    const med = medianFontSize(lines);
+    const kept = useFilter ? filterPdfLines(lines, viewport.width, viewport.height, med) : lines;
+    const active = kept.length ? kept : lines;
+    return {
+      blocks: linesToBlocks(active, med),
+      plain: linesToPlainText(active),
+    };
+  }
+
+  async function extractPdfPageLegacy(page) {
+    const content = await page.getTextContent();
+    const parts = [];
+    for (const item of content.items) {
+      if (item.str != null && String(item.str).length) parts.push(item.str);
+    }
+    return parts.join(" ").replace(/\s+/g, " ").trim();
   }
 
   function linesToBlocks(lines, medianSize) {
@@ -214,17 +250,11 @@
   }
 
   async function extractPdfPage(page) {
-    const viewport = page.getViewport({ scale: 1 });
-    const content = await page.getTextContent();
-    const glyphs = [];
-    for (const item of content.items) {
-      if (!item.str || !String(item.str).trim()) continue;
-      glyphs.push(pdfItemToGlyph(item));
-    }
-    const lines = groupGlyphsIntoLines(glyphs);
-    const med = medianFontSize(lines);
-    const kept = filterPdfLines(lines, viewport.width, viewport.height, med);
-    return linesToBlocks(kept, med);
+    return extractPdfPageLayout(page, true);
+  }
+
+  function textLen(s) {
+    return String(s || "").replace(/\s+/g, "").length;
   }
 
   async function extractPdfText(fileOrBuf) {
@@ -233,14 +263,28 @@
     const uint8 = new Uint8Array(buf);
     const images = hasPdfImages(uint8);
     const doc = await global.pdfjsLib.getDocument({ data: uint8.slice(), isEvalSupported: false, disableFontFace: true }).promise;
-    const allBlocks = [];
+
+    const layoutBlocks = [];
+    const layoutPlainParts = [];
+    const unfilteredPlainParts = [];
+    const legacyParts = [];
+
     for (let i = 1; i <= doc.numPages; i++) {
       const page = await doc.getPage(i);
-      const blocks = await extractPdfPage(page);
-      allBlocks.push(...blocks);
+      const filtered = await extractPdfPageLayout(page, true);
+      const unfiltered = await extractPdfPageLayout(page, false);
+      layoutBlocks.push(...filtered.blocks);
+      if (filtered.plain) layoutPlainParts.push(filtered.plain);
+      if (unfiltered.plain) unfilteredPlainParts.push(unfiltered.plain);
+      const legacy = await extractPdfPageLegacy(page);
+      if (legacy) legacyParts.push(legacy);
     }
-    const text = assembleBlocks(allBlocks);
-    const tooLittle = text.replace(/\s+/g, "").length < 30;
+
+    let text = assembleBlocks(layoutBlocks);
+    if (textLen(text) < 30) text = unfilteredPlainParts.join("\n\n").trim();
+    if (textLen(text) < 30) text = legacyParts.join("\n\n").trim();
+
+    const tooLittle = textLen(text) < 30;
     return { text, hasImages: images, isScannedLike: tooLittle };
   }
 
