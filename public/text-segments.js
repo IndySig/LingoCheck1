@@ -43,12 +43,28 @@
     return false;
   }
 
+  function isBulletLine(s) {
+    return /^[-*•●◦▪]\s/.test(String(s || "").trim());
+  }
+
+  function isContinuationLine(line) {
+    const t = String(line || "").trim();
+    if (!t) return false;
+    if (isListItemLine(t) || isSectionHeading(t) || isLabeledField(t)) return false;
+    return /^[a-z\u00C0-\u024F('"(\[]/.test(t);
+  }
+
   function shouldJoinLines(prev, next) {
     const a = String(prev || "").trim();
     const b = String(next || "").trim();
     if (!a || !b) return false;
-    if (isListItemLine(b) || isSectionHeading(b) || isLabeledField(b)) return false;
-    if (isListItemLine(a) || isSectionHeading(a)) return false;
+    if (isSectionHeading(b) || isLabeledField(b)) return false;
+    if (isSectionHeading(a)) return false;
+    // Wrapped continuation of a bullet item (next line is not a new bullet).
+    if (isBulletLine(a) && isContinuationLine(b)) return true;
+    if (isBulletLine(b) && !isBulletLine(a) && !endsSentence(a)) return false;
+    if (isListItemLine(b) && !isContinuationLine(b)) return false;
+    if (isListItemLine(a) && !isBulletLine(a)) return false;
     if (endsSentence(a) && /^[A-Z\u00C0-\u024F\u0400-\u04FF]/.test(b)) return false;
     if (/\d$/.test(a) && /^\d/.test(b)) return true;
     if (/[a-z,\u00C0-\u024F]$/.test(a) && /^[a-z0-9\u00C0-\u024F]/.test(b)) return true;
@@ -85,11 +101,25 @@
       const t = String(seg || "").trim();
       if (!t) continue;
       if (isListItemLine(t) || isSectionHeading(t) || isLabeledField(t)) {
+        if (isContinuationLine(t) && out.length) {
+          const last = out[out.length - 1];
+          if (isBulletLine(last) || isFragmentLine(t)) {
+            out[out.length - 1] = collapseSpaces(last + " " + t);
+            continue;
+          }
+        }
         flush();
         out.push(t);
         continue;
       }
       if (isFragmentLine(t)) {
+        if (out.length) {
+          const last = out[out.length - 1];
+          if (isBulletLine(last) || (!endsSentence(last) && isContinuationLine(t))) {
+            out[out.length - 1] = collapseSpaces(last + " " + t);
+            continue;
+          }
+        }
         buf.push(t);
         continue;
       }
@@ -196,10 +226,7 @@
     return false;
   }
 
-  function splitSegmentIntoSentences(segment) {
-    const t = repairLineWrapArtifacts(segment);
-    if (!t) return [];
-
+  function splitSegmentIntoSentencesInner(t) {
     const boundarySignals =
       (t.match(/[.!?](?:\s|$)/g) || []).length +
       (t.match(/;\s+/g) || []).length +
@@ -288,6 +315,69 @@
     const tail = t.slice(start).trim();
     if (tail) out.push(tail);
     return out.length ? out : [t];
+  }
+
+  function splitBulletBlock(segment) {
+    const lines = String(segment || "")
+      .replace(/\r\n/g, "\n")
+      .split(/\n/)
+      .map((l) => l.trim())
+      .filter(Boolean);
+    if (!lines.length) return null;
+    const hasBullets = lines.some((l) => isBulletLine(l));
+    if (!hasBullets) return null;
+
+    const out = [];
+    let intro = [];
+    for (const line of lines) {
+      if (isBulletLine(line)) {
+        if (intro.length) {
+          out.push(intro.join(" "));
+          intro = [];
+        }
+        out.push(line);
+      } else if (out.length && isBulletLine(out[out.length - 1])) {
+        out[out.length - 1] = collapseSpaces(out[out.length - 1] + " " + line);
+      } else if (isContinuationLine(line) && out.length && isBulletLine(out[out.length - 1])) {
+        out[out.length - 1] = collapseSpaces(out[out.length - 1] + " " + line);
+      } else {
+        intro.push(line);
+      }
+    }
+    if (intro.length) out.unshift(intro.join(" "));
+    return out.length ? out : null;
+  }
+
+  function mergeWrappedSentenceUnits(sentences) {
+    const out = [];
+    for (const s of sentences) {
+      const t = String(s || "").trim();
+      if (!t) continue;
+      if (
+        out.length &&
+        isContinuationLine(t) &&
+        (!endsSentence(out[out.length - 1]) || isBulletLine(out[out.length - 1]))
+      ) {
+        out[out.length - 1] = collapseSpaces(out[out.length - 1] + " " + t);
+      } else {
+        out.push(t);
+      }
+    }
+    return out;
+  }
+
+  function splitSegmentIntoSentences(segment) {
+    const t = repairLineWrapArtifacts(segment);
+    if (!t) return [];
+
+    const bulletParts = splitBulletBlock(t);
+    if (bulletParts) {
+      return mergeWrappedSentenceUnits(
+        bulletParts.flatMap((part) => (isBulletLine(part) ? [part] : splitSegmentIntoSentencesInner(part)))
+      );
+    }
+
+    return mergeWrappedSentenceUnits(splitSegmentIntoSentencesInner(t));
   }
 
   function segmentsToDisplayText(segments) {
