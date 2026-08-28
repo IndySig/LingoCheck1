@@ -53,6 +53,7 @@
 </head>
 <body>
 <div id="root"></div>
+<script src="doc-extract.js"></script>
 <script>
 const {useState,useEffect,useCallback,useRef}=React;
 
@@ -126,52 +127,17 @@ function base64ToUint8Array(b64){
   return bytes;
 }
 
-function hasPdfImages(uint8){
-  try{
-    const head = new TextDecoder("latin1").decode(uint8.slice(0, Math.min(uint8.length, 350000)));
-    return head.includes("/Subtype /Image") || head.includes("/Image");
-  }catch{ return false; }
-}
-
-async function extractPdfText(fileOrBuf){
-  if(!window.pdfjsLib) throw new Error("PDF support not loaded");
-  const buf = fileOrBuf instanceof ArrayBuffer ? fileOrBuf : await fileToArrayBuffer(fileOrBuf);
-  const uint8 = new Uint8Array(buf);
-  const images = hasPdfImages(uint8);
-  const doc = await pdfjsLib.getDocument({ data: uint8.slice(), isEvalSupported: false, disableFontFace: true }).promise;
-  const pageTexts = [];
-  for(let i=1;i<=doc.numPages;i++){
-    const page = await doc.getPage(i);
-    const content = await page.getTextContent();
-    const text = content.items.map(it=>it.str).join(" ").replace(/\s+/g," ").trim();
-    if(text) pageTexts.push(text);
-  }
-  const cleaned = pageTexts.join("\n\n").trim();
-  const tooLittle = cleaned.replace(/\s+/g,"").length < 30;
-  return { text: cleaned, hasImages: images, isScannedLike: tooLittle };
-}
-
-async function extractDocxText(fileOrBuf){
-  if(!window.JSZip) throw new Error("DOCX support not loaded");
-  const buf = fileOrBuf instanceof ArrayBuffer ? fileOrBuf : await fileToArrayBuffer(fileOrBuf);
-  const zip = await JSZip.loadAsync(buf);
-  const files = Object.keys(zip.files);
-  if(files.some(n => /vbaProject\.bin|vbaData\.xml|word\/macros\//i.test(n))){
-    return { text:"", hasImages:true, hasDrawing:true, blocked:true };
-  }
-  const hasMedia = files.some(n => n.startsWith("word/media/"));
-  const docFile = zip.file("word/document.xml");
-  if(!docFile) return { text:"", hasImages: hasMedia, hasDrawing: false };
-  const xmlStr = await docFile.async("string");
-  const xml = new DOMParser().parseFromString(xmlStr, "application/xml");
-  const nodes = Array.from(xml.getElementsByTagName("*"));
-  const hasDrawing = nodes.some(n => (n.localName==="drawing" || n.localName==="pict"));
-  const paragraphs = Array.from(xml.getElementsByTagNameNS("*","p")).map(p=>{
-    const tNodes = Array.from(p.getElementsByTagNameNS("*","t"));
-    return tNodes.map(n=>n.textContent||"").join("").replace(/\s+/g," ").trim();
-  }).filter(Boolean);
-  const text = paragraphs.join("\n\n");
-  return { text, hasImages: hasMedia, hasDrawing, blocked:false };
+function applyExtractedText(raw, file, sourceExt, baseReason){
+  const DX = window.LcDocExtract;
+  const text = DX ? DX.truncateExtractedText(raw) : String(raw||"").slice(0, 25000);
+  const truncated = String(raw||"").length > text.length;
+  setInputText(text);
+  setFileScan({
+    name: file.name,
+    fit: true,
+    reason: truncated ? baseReason + " (truncated to 25,000 characters)" : baseReason
+  });
+  setSourceFile({ name: file.name, ext: sourceExt });
 }
 
 function downloadBlob(blob, filename){
@@ -837,14 +803,14 @@ function ClientView({clientId}){
     if(file.size>max){setError("File too large (max 10 MB).");return;}
     setFileBusy(true);
     try{
+      const DX = window.LcDocExtract;
+      if(!DX) throw new Error("Document parser not loaded");
       if(name.endsWith(".txt")||name.endsWith(".md")){
         const reader=new FileReader();
         reader.onload=ev=>{
           const raw=String(ev.target.result||"");
-          const text=raw.length>25000?raw.slice(0,25000):raw;
-          setInputText(text);
-          setFileScan({name:file.name,fit:true,reason:raw.length>25000?"Text file (truncated to 25,000 characters)":"Text file"});
-          setSourceFile({name:file.name,ext:name.endsWith(".md")?"md":"txt"});
+          const text=DX.extractPlainText(raw);
+          applyExtractedText(text, file, name.endsWith(".md")?"md":"txt", "Text file");
           setFileBusy(false);
         };
         reader.onerror=()=>{setError("Could not read file.");setFileBusy(false);};
@@ -853,7 +819,7 @@ function ClientView({clientId}){
       }
       if(name.endsWith(".pdf")){
         const buf = await fileToArrayBuffer(file);
-        const r=await extractPdfText(buf);
+        const r=await DX.extractPdfText(buf);
         if(r.isScannedLike || !r.text){
           setFileScan({name:file.name,fit:false,reason:"PDF has no usable text layer (likely scanned)."});
           setInputText("");
@@ -862,16 +828,15 @@ function ClientView({clientId}){
         const reason = r.hasImages
           ? "Text extracted; images will be kept on download."
           : "PDF text extracted";
-        setInputText(r.text.length > 25000 ? r.text.slice(0, 25000) : r.text);
-        setFileScan({name:file.name,fit:true,reason: r.text.length > 25000 ? reason + " (truncated to 25,000 characters)" : reason});
+        applyExtractedText(r.text, file, "pdf", reason);
         const fileB64=arrayBufferToBase64(buf);
         sourceFileB64Ref.current=fileB64;
-        setSourceFile({name:file.name,ext:"pdf",fileB64});
+        setSourceFile(prev=>({...prev, fileB64}));
         return;
       }
       if(name.endsWith(".docx")){
         const buf = await fileToArrayBuffer(file);
-        const r=await extractDocxText(buf);
+        const r=await DX.extractDocxText(buf);
         if(r.blocked){
           setFileScan({name:file.name,fit:false,reason:"Word document contains macros or executable content."});
           setInputText("");
@@ -885,11 +850,10 @@ function ClientView({clientId}){
         const reason = (r.hasImages||r.hasDrawing)
           ? "Text extracted; images will be kept on download."
           : "Word text extracted";
-        setInputText(r.text.length > 25000 ? r.text.slice(0, 25000) : r.text);
-        setFileScan({name:file.name,fit:true,reason: r.text.length > 25000 ? reason + " (truncated to 25,000 characters)" : reason});
+        applyExtractedText(r.text, file, "docx", reason);
         const fileB64=arrayBufferToBase64(buf);
         sourceFileB64Ref.current=fileB64;
-        setSourceFile({name:file.name,ext:"docx",fileB64});
+        setSourceFile(prev=>({...prev, fileB64}));
         return;
       }
       setError("Unsupported file type. Upload .txt, .md, .docx, or .pdf.");
