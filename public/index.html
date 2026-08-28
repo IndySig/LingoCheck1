@@ -127,19 +127,6 @@ function base64ToUint8Array(b64){
   return bytes;
 }
 
-function applyExtractedText(raw, file, sourceExt, baseReason){
-  const DX = window.LcDocExtract;
-  const text = DX ? DX.truncateExtractedText(raw) : String(raw||"").slice(0, 25000);
-  const truncated = String(raw||"").length > text.length;
-  setInputText(text);
-  setFileScan({
-    name: file.name,
-    fit: true,
-    reason: truncated ? baseReason + " (truncated to 25,000 characters)" : baseReason
-  });
-  setSourceFile({ name: file.name, ext: sourceExt });
-}
-
 function downloadBlob(blob, filename){
   const url = URL.createObjectURL(blob);
   const a = document.createElement("a");
@@ -793,6 +780,19 @@ function ClientView({clientId}){
     setSourceFile(null);
     sourceFileB64Ref.current=null;
     if(fileRef.current) fileRef.current.value="";
+  }
+
+  function applyExtractedText(raw, file, sourceExt, baseReason){
+    const DX = window.LcDocExtract;
+    const text = DX ? DX.truncateExtractedText(raw) : String(raw||"").slice(0, 25000);
+    const truncated = String(raw||"").length > text.length;
+    setInputText(text);
+    setFileScan({
+      name: file.name,
+      fit: true,
+      reason: truncated ? baseReason + " (truncated to 25,000 characters)" : baseReason
+    });
+    setSourceFile({ name: file.name, ext: sourceExt });
   }
 
   async function handleFile(e){
