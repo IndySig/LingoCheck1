@@ -238,12 +238,44 @@ function formatDateTime(ts){
   return new Date(ts).toLocaleString();
 }
 
+const STALE_CLAIM_MS = 4 * 60 * 60 * 1000;
+
+function isStaleClaim(job){
+  if(!job || job.status==="complete" || !job.claimedByRevisorId) return false;
+  const claimedAt = typeof job.claimedAt==="number" ? job.claimedAt : 0;
+  return claimedAt>0 && (Date.now()-claimedAt)>STALE_CLAIM_MS;
+}
+
+function isQueuedJob(job){
+  if(!job || job.status==="complete") return false;
+  if(!job.claimedByRevisorId) return true;
+  return isStaleClaim(job);
+}
+
+function formatWaiting(ts){
+  const ms = Math.max(0, Date.now()-(ts||0));
+  const m = Math.floor(ms/60000);
+  if(m<1) return "just now";
+  if(m<60) return "waiting "+m+"m";
+  const h = Math.floor(m/60);
+  if(h<48) return "waiting "+h+"h";
+  return "waiting "+Math.floor(h/24)+"d";
+}
+
+function jobPayoutCents(job, rateCents){
+  if(typeof job.payoutCents==="number") return Math.round(job.payoutCents);
+  const words = typeof job.sourceWordCount==="number" ? job.sourceWordCount : 0;
+  return Math.round(words * (rateCents||2.5));
+}
+
 function RevisorApp(){
   const[ready,setReady]=useState(false);
   const[authErr,setAuthErr]=useState("");
   const[me,setMe]=useState(null);
   const[allJobs,setAllJobs]=useState([]);
   const[tab,setTab]=useState("queue"); // queue | mine | finance
+  const[focusJobId,setFocusJobId]=useState(null);
+  const[payoutRate,setPayoutRate]=useState(2.5);
 
   const refresh=useCallback(async()=>{
     try{
@@ -261,6 +293,10 @@ function RevisorApp(){
         if(!meResp.authenticated){location.href="/login";return;}
         if(cancelled) return;
         setMe(meResp);
+        try{
+          const cfg=await apiFetch("/api/public-config");
+          if(!cancelled && typeof cfg.payoutPerWordCents==="number") setPayoutRate(cfg.payoutPerWordCents);
+        }catch{}
         setReady(true);
         refresh();
         timer=setInterval(refresh,2500);
@@ -281,6 +317,15 @@ function RevisorApp(){
 
   async function claimJob(id){
     const j=await apiFetch(`/api/revisor/jobs/${id}/claim`,{method:"POST"});
+    setAllJobs(prev=>{
+      const exists=prev.some(x=>x.id===id);
+      return exists?prev.map(x=>x.id===id?j:x):[j,...prev];
+    });
+    return j;
+  }
+
+  async function unclaimJob(id){
+    const j=await apiFetch(`/api/revisor/jobs/${id}/unclaim`,{method:"POST"});
     setAllJobs(prev=>prev.map(x=>x.id===id?j:x));
     return j;
   }
@@ -296,7 +341,7 @@ function RevisorApp(){
     );
   }
 
-  return React.createElement(RevisorView,{me,allJobs,tab,setTab,updateJob,claimJob,onLogout:logout});
+  return React.createElement(RevisorView,{me,allJobs,tab,setTab,updateJob,claimJob,unclaimJob,focusJobId,setFocusJobId,payoutRate,onLogout:logout});
 }
 
 function Header({me,tab,setTab,onLogout,counts,isCompact}){
@@ -322,21 +367,30 @@ function Header({me,tab,setTab,onLogout,counts,isCompact}){
   );
 }
 
-function QueueTab({me,allJobs,claimJob,setTab,isCompact}){
+function QueueTab({me,allJobs,claimJob,setTab,setFocusJobId,isCompact,payoutRate}){
   const e=React.createElement;
   const [claimingId,setClaimingId]=useState(null);
   const [err,setErr]=useState("");
+  const [langFilter,setLangFilter]=useState("all");
+
+  const languages=useMemo(()=>{
+    const set=new Set();
+    allJobs.forEach(j=>{ if(isQueuedJob(j) && j.language) set.add(j.language); });
+    return Array.from(set).sort();
+  },[allJobs]);
 
   const queue=useMemo(()=>allJobs
-    .filter(j=>j.status==="awaiting_review" && !j.claimedByRevisorId)
+    .filter(isQueuedJob)
+    .filter(j=>langFilter==="all"||j.language===langFilter)
     .sort((a,b)=>(a.createdAt||0)-(b.createdAt||0))
-  ,[allJobs]);
+  ,[allJobs,langFilter]);
 
   async function onClaim(id){
     setErr("");
     setClaimingId(id);
     try{
-      await claimJob(id);
+      const j=await claimJob(id);
+      setFocusJobId(j.id);
       setTab("mine");
     }catch(ex){
       setErr(ex.message);
@@ -345,7 +399,7 @@ function QueueTab({me,allJobs,claimJob,setTab,isCompact}){
     }
   }
 
-  if(queue.length===0){
+  if(queue.length===0 && langFilter==="all"){
     return e("div",{style:{textAlign:"center",padding:"80px 0"}},
       e("div",{style:{fontSize:40,marginBottom:18}},"✓"),
       e("div",{style:{fontFamily:"inherit",fontSize:24,color:C.text,marginBottom:8}},"No jobs waiting"),
@@ -358,28 +412,41 @@ function QueueTab({me,allJobs,claimJob,setTab,isCompact}){
   }
 
   return e("div",null,
-    e("span",{style:st.label},"Available jobs · claim to start working"),
+    e("div",{style:{display:"flex",alignItems:isCompact?"stretch":"center",justifyContent:"space-between",gap:10,marginBottom:12,flexWrap:"wrap"}},
+      e("span",{style:{...st.label,marginBottom:0}},"Available jobs · claim to start working"),
+      e("select",{value:langFilter,onChange:ev=>setLangFilter(ev.target.value),style:{background:C.soft,border:`1px solid ${C.border}`,borderRadius:10,padding:"8px 12px",fontFamily:"inherit",fontSize:12,fontWeight:600,color:C.text,outline:"none",cursor:"pointer",minWidth:isCompact?"100%":140}},
+        e("option",{value:"all"},"All languages"),
+        languages.map(lang=>e("option",{key:lang,value:lang},lang))
+      )
+    ),
     err&&e("div",{style:{margin:"0 0 12px",fontSize:12,color:"#c43d3d"}},err),
-    e("div",{style:{display:"grid",gridTemplateColumns:"1fr",gap:12}},
-      queue.map(job=>e("div",{key:job.id,style:{...st.card,padding:isCompact?16:18,animation:"fadeUp 0.25s ease",display:"grid",gridTemplateColumns:isCompact?"1fr":"1fr auto",gap:16,alignItems:isCompact?"stretch":"center"}},
-        e("div",null,
-          e("div",{style:{fontSize:13,fontWeight:600,color:C.text,marginBottom:6}},
-            job.qaOnly?job.language:"EN → "+job.language,
-            job.qaOnly&&e("span",{style:{marginLeft:8,fontSize:10,fontWeight:600,letterSpacing:"0.6px",textTransform:"uppercase",color:C.accent,background:"rgba(109,79,216,0.08)",border:"1px solid rgba(109,79,216,0.18)",padding:"2px 8px",borderRadius:999}},"QA only"),
-            typeof job.sourceWordCount==="number"&&e("span",{style:{marginLeft:10,fontSize:11,fontWeight:500,color:C.muted}}, job.sourceWordCount," words")
-          ),
-          e("div",{style:{fontSize:12,color:C.muted,lineHeight:1.6,maxHeight:60,overflow:"hidden"}},(job.qaOnly?job.aiTranslation:job.originalText||"").substring(0,260),(job.qaOnly?job.aiTranslation:job.originalText||"").length>260?"…":""),
-          e("div",{style:{fontSize:11,color:C.muted,marginTop:8}},"Submitted ",formatDateTime(job.createdAt))
-        ),
-        e("button",{onClick:()=>onClaim(job.id),disabled:claimingId===job.id,style:{...st.btn,padding:"12px 18px",background:C.accent,color:C.white,fontSize:13,whiteSpace:"nowrap",width:isCompact?"100%":"auto"}},
-          claimingId===job.id?e(React.Fragment,null,e(Spinner,{size:14})," Claiming…"):"Claim job"
-        )
-      ))
-    )
+    queue.length===0
+      ?e("div",{style:{...st.card,textAlign:"center",padding:36,color:C.muted,fontSize:13}},"No open jobs for this language filter.")
+      :e("div",{style:{display:"grid",gridTemplateColumns:"1fr",gap:12}},
+        queue.map(job=>{
+          const payout=jobPayoutCents(job, payoutRate);
+          const stale=isStaleClaim(job);
+          return e("div",{key:job.id,style:{...st.card,padding:isCompact?16:18,animation:"fadeUp 0.25s ease",display:"grid",gridTemplateColumns:isCompact?"1fr":"1fr auto",gap:16,alignItems:isCompact?"stretch":"center"}},
+            e("div",null,
+              e("div",{style:{fontSize:13,fontWeight:600,color:C.text,marginBottom:6,display:"flex",alignItems:"center",gap:8,flexWrap:"wrap"}},
+                job.qaOnly?job.language:"EN → "+job.language,
+                job.qaOnly&&e("span",{style:{fontSize:10,fontWeight:600,letterSpacing:"0.6px",textTransform:"uppercase",color:C.accent,background:"rgba(109,79,216,0.08)",border:"1px solid rgba(109,79,216,0.18)",padding:"2px 8px",borderRadius:999}},"QA only"),
+                stale&&e("span",{style:{fontSize:10,fontWeight:600,letterSpacing:"0.6px",textTransform:"uppercase",color:C.amber,background:C.amberBg,border:`1px solid ${C.amberBorder}`,padding:"2px 8px",borderRadius:999}},"Stale — reclaim"),
+                typeof job.sourceWordCount==="number"&&e("span",{style:{fontSize:11,fontWeight:500,color:C.muted}}, job.sourceWordCount," words · ",fmtEur(payout))
+              ),
+              e("div",{style:{fontSize:12,color:C.muted,lineHeight:1.6,maxHeight:60,overflow:"hidden"}},(job.qaOnly?job.aiTranslation:job.originalText||"").substring(0,260),(job.qaOnly?job.aiTranslation:job.originalText||"").length>260?"…":""),
+              e("div",{style:{fontSize:11,color:C.muted,marginTop:8}},formatWaiting(job.createdAt)," · submitted ",formatDateTime(job.createdAt))
+            ),
+            e("button",{onClick:()=>onClaim(job.id),disabled:claimingId===job.id,style:{...st.btn,padding:"12px 18px",background:C.accent,color:C.white,fontSize:13,whiteSpace:"nowrap",width:isCompact?"100%":"auto"}},
+              claimingId===job.id?e(React.Fragment,null,e(Spinner,{size:14})," Claiming…"):(stale?"Reclaim job":"Claim job")
+            )
+          );
+        })
+      )
   );
 }
 
-function ReviewEditor({selectedJob,updateJob,onDone,isCompact}){
+function ReviewEditor({selectedJob,updateJob,unclaimJob,onDone,onReleased,isCompact,payoutRate}){
   const e=React.createElement;
   const[editedText,setEditedText]=useState(selectedJob.revisedTranslation||selectedJob.aiTranslation||"");
   const[mode,setMode]=useState("sentences");
@@ -388,8 +455,10 @@ function ReviewEditor({selectedJob,updateJob,onDone,isCompact}){
   const[sentenceParaMap,setSentenceParaMap]=useState([]);
   const[paragraphCount,setParagraphCount]=useState(0);
   const[sending,setSending]=useState(false);
+  const[saving,setSaving]=useState(false);
+  const[releasing,setReleasing]=useState(false);
+  const[savedNote,setSavedNote]=useState("");
   const[isWide,setIsWide]=useState(()=>window.matchMedia && window.matchMedia("(min-width: 900px)").matches);
-  const isCompact=!useMedia("(min-width: 768px)");
 
   useEffect(()=>{
     if(!window.matchMedia) return;
@@ -414,20 +483,41 @@ function ReviewEditor({selectedJob,updateJob,onDone,isCompact}){
     setSentenceParaMap(review.paraMap);
     setParagraphCount(review.paragraphCount);
     setMode("sentences");
+    setSavedNote("");
   },[selectedJob.id]);
 
-  async function handleSend(){
+  function draftPayload(){
     const finalText = mode==="sentences"
       ? sentencesToParagraphText(editedSentences, sentenceParaMap, paragraphCount)
       : (editedText||"").trim();
+    const patch = { revisedTranslation: finalText };
+    if(mode==="sentences" && editedSentences.length){
+      patch.translationSentences = editedSentences.map(s => String(s||"").trim());
+    }
+    return { finalText, patch };
+  }
+
+  async function handleSaveDraft(){
+    const { finalText, patch } = draftPayload();
+    if(!finalText){ alert("Nothing to save yet."); return; }
+    setSaving(true);
+    try{
+      await updateJob(selectedJob.id, patch);
+      setSavedNote("Draft saved");
+      setTimeout(()=>setSavedNote(""),2500);
+    }catch(ex){
+      alert(ex.message);
+    }finally{
+      setSaving(false);
+    }
+  }
+
+  async function handleSend(){
+    const { finalText, patch } = draftPayload();
     if(!finalText) return;
     setSending(true);
     try{
-      const patch = { status:"complete", revisedTranslation:finalText };
-      if(mode==="sentences" && editedSentences.length){
-        patch.translationSentences = editedSentences.map(s => String(s||"").trim());
-      }
-      await updateJob(selectedJob.id, patch);
+      await updateJob(selectedJob.id, { ...patch, status:"complete" });
       onDone&&onDone();
     }catch(ex){
       alert(ex.message);
@@ -436,11 +526,40 @@ function ReviewEditor({selectedJob,updateJob,onDone,isCompact}){
     }
   }
 
+  async function handleRelease(){
+    if(!confirm("Release this job back to the queue?")) return;
+    setReleasing(true);
+    try{
+      await unclaimJob(selectedJob.id);
+      onReleased&&onReleased();
+    }catch(ex){
+      alert(ex.message);
+    }finally{
+      setReleasing(false);
+    }
+  }
+
   const paneHeight = isWide ? 420 : (isCompact ? 260 : 320);
+  const payoutHint = fmtEur(jobPayoutCents(selectedJob, payoutRate));
 
   return e("div",{style:{animation:"fadeUp 0.25s ease"}},
-    e("span",{style:st.label},selectedJob.qaOnly?"Proofread client translation":"Review & edit translation"),
-    selectedJob.qaOnly&&e("div",{style:{background:C.amberBg,border:`1px solid ${C.amberBorder}`,borderRadius:10,padding:"10px 14px",marginBottom:12,fontSize:12,color:C.amber,lineHeight:1.55}},"This client submitted their own AI translation. There is no English source — proofread the text below."),
+    e("div",{style:{display:"flex",alignItems:"center",justifyContent:"space-between",gap:10,marginBottom:10,flexWrap:"wrap"}},
+      e("span",{style:{...st.label,marginBottom:0}},selectedJob.qaOnly?"Proofread client translation":"Review & edit translation"),
+      e("div",{style:{fontSize:12,color:C.muted}},
+        typeof selectedJob.sourceWordCount==="number"?selectedJob.sourceWordCount+" words · ":"",
+        "payout ",payoutHint
+      )
+    ),
+    selectedJob.qaOnly&&e("div",{style:{background:C.amberBg,border:`1px solid ${C.amberBorder}`,borderRadius:10,padding:"10px 14px",marginBottom:12,fontSize:12,color:C.amber,lineHeight:1.55}},
+      "This client submitted their own AI translation. LingoCheck already ran a hallucination scan — proofread the text below.",
+      selectedJob.qaFindings?.summary&&e("div",{style:{marginTop:8,opacity:0.95}},selectedJob.qaFindings.summary),
+      Array.isArray(selectedJob.qaFindings?.issues)&&selectedJob.qaFindings.issues.length>0&&e("ul",{style:{margin:"8px 0 0",paddingLeft:18}},
+        selectedJob.qaFindings.issues.map((issue,i)=>e("li",{key:i,style:{marginBottom:3}},
+          e("strong",{style:{textTransform:"uppercase",fontSize:10,letterSpacing:"0.4px"}},issue.severity||"note"),
+          " — ",issue.detail
+        ))
+      )
+    ),
     e("div",{style:{display:"flex",alignItems:"center",justifyContent:"space-between",margin:"0 0 10px",flexWrap:"wrap",gap:10}},
       e("div",{style:{fontSize:12,color:C.muted,flex:isCompact?"1 1 100%":"0 0 auto"}},"Mode:"),
       e("div",{style:{display:"flex",gap:8,flex:isCompact?"1 1 100%":"0 0 auto"}},
@@ -479,19 +598,29 @@ function ReviewEditor({selectedJob,updateJob,onDone,isCompact}){
           );
         })
       ),
-    e("div",{style:{background:C.amberBg,border:`1px solid ${C.amberBorder}`,borderRadius:10,padding:"11px 14px",marginBottom:14,fontSize:12,color:C.amber}},"✦  Make any corrections, then send to the client."),
-    e("button",{onClick:handleSend,disabled:sending,style:{...st.btn,width:"100%",padding:14,background:C.green,fontSize:15,color:C.white,display:"flex",alignItems:"center",justifyContent:"center",gap:8}},
-      sending?e(React.Fragment,null,e(Spinner,{size:14})," Sending…"):"✓ Send to Client"
+    e("div",{style:{background:C.soft,border:`1px solid ${C.border}`,borderRadius:10,padding:"11px 14px",marginBottom:14,fontSize:12,color:C.muted}},"Save a draft anytime. Send to client when the review is finished — or release the job back to the queue."),
+    savedNote&&e("div",{style:{fontSize:12,color:C.green,marginBottom:10}},savedNote),
+    e("div",{style:{display:"grid",gridTemplateColumns:isCompact?"1fr":"1fr 1fr auto",gap:10}},
+      e("button",{onClick:handleSaveDraft,disabled:saving||sending||releasing,style:{...st.btn,padding:14,background:"transparent",border:`1px solid ${C.border}`,color:C.muted,fontSize:14}},
+        saving?"Saving…":"Save draft"
+      ),
+      e("button",{onClick:handleSend,disabled:sending||saving||releasing,style:{...st.btn,padding:14,background:C.green,fontSize:15,color:C.white,display:"flex",alignItems:"center",justifyContent:"center",gap:8}},
+        sending?e(React.Fragment,null,e(Spinner,{size:14})," Sending…"):"✓ Send to Client"
+      ),
+      e("button",{onClick:handleRelease,disabled:releasing||sending||saving,style:{...st.btn,padding:14,background:"transparent",border:`1px solid ${C.border}`,color:C.muted,fontSize:13,whiteSpace:"nowrap"}},
+        releasing?"Releasing…":"Release job"
+      )
     )
   );
 }
 
-function MyAssignmentsTab({me,allJobs,updateJob,isCompact}){
+function MyAssignmentsTab({me,allJobs,updateJob,unclaimJob,focusJobId,setFocusJobId,isCompact,payoutRate}){
   const e=React.createElement;
   const isWide=useMedia("(min-width: 900px)");
   const[selectedId,setSelectedId]=useState(null);
   const[justSent,setJustSent]=useState(false);
   const[showList,setShowList]=useState(true);
+  const[listFilter,setListFilter]=useState("active"); // active | completed | all
 
   const mine=useMemo(()=>allJobs
     .filter(j=>j.claimedByRevisorId===me.revisorId || j.completedByRevisorId===me.revisorId)
@@ -504,6 +633,21 @@ function MyAssignmentsTab({me,allJobs,updateJob,isCompact}){
       return bTs-aTs;
     })
   ,[allJobs,me.revisorId]);
+
+  const filtered=useMemo(()=>{
+    if(listFilter==="active") return mine.filter(j=>j.status!=="complete");
+    if(listFilter==="completed") return mine.filter(j=>j.status==="complete");
+    return mine;
+  },[mine,listFilter]);
+
+  useEffect(()=>{
+    if(focusJobId){
+      setSelectedId(focusJobId);
+      setListFilter("active");
+      setShowList(false);
+      setFocusJobId&&setFocusJobId(null);
+    }
+  },[focusJobId,setFocusJobId]);
 
   useEffect(()=>{
     if(selectedId && !mine.find(j=>j.id===selectedId)) setSelectedId(null);
@@ -527,6 +671,7 @@ function MyAssignmentsTab({me,allJobs,updateJob,isCompact}){
   function listItem(job){
     const isComplete=job.status==="complete";
     const isSelected=selectedId===job.id;
+    const payout=jobPayoutCents(job, payoutRate);
     return e("div",{key:job.id,onClick:()=>setSelectedId(job.id),style:{...st.card,padding:14,marginBottom:8,cursor:"pointer",border:`1px solid ${isSelected?"rgba(109,79,216,0.32)":C.border}`,background:isSelected?"rgba(109,79,216,0.06)":undefined,transition:"border-color 0.12s, background 0.12s",animation:"fadeUp 0.25s ease"}},
       e("div",{style:{display:"flex",alignItems:"center",justifyContent:"space-between",gap:8,marginBottom:6}},
         e("div",{style:{fontSize:13,fontWeight:600,color:C.text,display:"flex",alignItems:"center",gap:8,flexWrap:"wrap"}},
@@ -537,19 +682,31 @@ function MyAssignmentsTab({me,allJobs,updateJob,isCompact}){
       ),
       e("div",{style:{fontSize:12,color:C.muted,marginBottom:6,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}},(job.qaOnly?job.aiTranslation:job.originalText||"").substring(0,60),"…"),
       e("div",{style:{fontSize:11,color:C.muted}},
-        typeof job.sourceWordCount==="number"?job.sourceWordCount+" words · ":"",
+        typeof job.sourceWordCount==="number"?job.sourceWordCount+" words · "+fmtEur(payout)+" · ":"",
         isComplete?("Completed "+formatDateTime(job.completedAt)):("Claimed "+formatDateTime(job.claimedAt))
       )
     );
   }
 
+  function filterBtn(id,label){
+    const active=listFilter===id;
+    return e("button",{onClick:()=>setListFilter(id),style:{...st.btn,padding:"6px 10px",fontSize:11,background:active?"rgba(109,79,216,0.10)":"transparent",border:`1px solid ${active?"rgba(109,79,216,0.28)":C.border}`,color:active?C.accent:C.muted}},label);
+  }
+
   return e("div",{style:{display:"grid",gridTemplateColumns:(selectedJob&&!showList)?"1fr":(selectedJob&&isWide?"260px 1fr":"1fr"),gap:16,alignItems:"start"}},
     (showList||!selectedJob)&&e("div",null,
-      e("div",{style:{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:8}},
-        e("span",{style:st.label},"My assignments"),
-        selectedJob&&e("button",{onClick:()=>setShowList(false),title:"Hide list",style:{...st.btn,background:"transparent",border:`1px solid ${C.border}`,color:C.muted,fontSize:11,padding:"4px 10px"}},"Hide")
+      e("div",{style:{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:8,gap:8,flexWrap:"wrap"}},
+        e("span",{style:{...st.label,marginBottom:0}},"My assignments"),
+        e("div",{style:{display:"flex",gap:6,flexWrap:"wrap"}},
+          filterBtn("active","Active"),
+          filterBtn("completed","Completed"),
+          filterBtn("all","All"),
+          selectedJob&&e("button",{onClick:()=>setShowList(false),title:"Hide list",style:{...st.btn,background:"transparent",border:`1px solid ${C.border}`,color:C.muted,fontSize:11,padding:"4px 10px"}},"Hide")
+        )
       ),
-      mine.map(listItem)
+      filtered.length===0
+        ?e("div",{style:{...st.card,padding:24,textAlign:"center",color:C.muted,fontSize:13}},listFilter==="active"?"No active jobs.":"No jobs in this filter.")
+        :filtered.map(listItem)
     ),
     selectedJob&&!showList&&e("div",{style:{marginBottom:8}},
       e("button",{onClick:()=>{setSelectedId(null);setShowList(true);},style:{...st.btn,background:"transparent",border:`1px solid ${C.border}`,color:C.muted,fontSize:12,padding:"6px 12px",marginBottom:12}},"← Back to list")
@@ -565,7 +722,7 @@ function MyAssignmentsTab({me,allJobs,updateJob,isCompact}){
                 ),
                 e("div",{style:{display:"grid",gridTemplateColumns:isCompact?"1fr":"1fr 1fr",gap:12,marginBottom:18}},
                   e("div",null,e("div",{style:{fontSize:11,color:C.muted,letterSpacing:"1px",textTransform:"uppercase"}},"Language"),e("div",{style:{fontSize:14,color:C.text,marginTop:4}}, selectedJob.qaOnly?selectedJob.language:"EN → "+selectedJob.language)),
-                  e("div",null,e("div",{style:{fontSize:11,color:C.muted,letterSpacing:"1px",textTransform:"uppercase"}},"Words"),e("div",{style:{fontSize:14,color:C.text,marginTop:4}}, selectedJob.sourceWordCount||0)),
+                  e("div",null,e("div",{style:{fontSize:11,color:C.muted,letterSpacing:"1px",textTransform:"uppercase"}},"Words / payout"),e("div",{style:{fontSize:14,color:C.text,marginTop:4}}, (selectedJob.sourceWordCount||0)," · ",fmtEur(jobPayoutCents(selectedJob,payoutRate)))),
                   e("div",null,e("div",{style:{fontSize:11,color:C.muted,letterSpacing:"1px",textTransform:"uppercase"}},"Claimed"),e("div",{style:{fontSize:14,color:C.text,marginTop:4}}, formatDateTime(selectedJob.claimedAt))),
                   e("div",null,e("div",{style:{fontSize:11,color:C.muted,letterSpacing:"1px",textTransform:"uppercase"}},"Completed"),e("div",{style:{fontSize:14,color:C.text,marginTop:4}}, formatDateTime(selectedJob.completedAt)))
                 ),
@@ -580,15 +737,15 @@ function MyAssignmentsTab({me,allJobs,updateJob,isCompact}){
                   )
                 )
               )
-            : e(ReviewEditor,{selectedJob,updateJob,onDone:()=>{setJustSent(true); setTimeout(()=>setJustSent(false),3500);},isCompact})
+            : e(ReviewEditor,{selectedJob,updateJob,unclaimJob,payoutRate,onDone:()=>{setJustSent(true); setTimeout(()=>setJustSent(false),3500);},onReleased:()=>{setSelectedId(null);setShowList(true);},isCompact})
         )
       : (!showList && e("div",{style:st.muted},"Select an assignment to open it."))
   );
 }
 
-function FinanceTab({me,allJobs,isCompact}){
+function FinanceTab({me,allJobs,isCompact,payoutRate}){
   const e=React.createElement;
-  const RATE = 2.5;
+  const RATE = payoutRate||2.5;
 
   const completed = useMemo(()=>allJobs
     .filter(j=>j.completedByRevisorId===me.revisorId && j.status==="complete")
@@ -597,9 +754,9 @@ function FinanceTab({me,allJobs,isCompact}){
 
   const items = useMemo(()=>completed.map(j=>{
     const words = typeof j.sourceWordCount==="number" ? j.sourceWordCount : 0;
-    const earningsCents = Math.round(words * RATE);
+    const earningsCents = jobPayoutCents(j, RATE);
     return {id:j.id,language:j.language,completedAt:j.completedAt||j.createdAt,sourceWordCount:words,earningsCents};
-  }),[completed]);
+  }),[completed,RATE]);
 
   const totalCents = items.reduce((a,b)=>a+b.earningsCents,0);
   const totalWords = items.reduce((a,b)=>a+b.sourceWordCount,0);
@@ -622,6 +779,7 @@ function FinanceTab({me,allJobs,isCompact}){
   },[items]);
 
   const thisMonth = monthGroups.find(g=>g.key===nowKey) || {cents:0,words:0,items:[]};
+  const rateLabel = "€"+(RATE/100).toFixed(3).replace(/0+$/,"").replace(/\.$/,"")+" / word";
 
   function statCard(label,value,sub){
     return e("div",{style:{...st.card,padding:20}},
@@ -633,11 +791,11 @@ function FinanceTab({me,allJobs,isCompact}){
 
   return e("div",null,
     e("span",{style:st.label},"Finance overview"),
-    e("div",{style:{fontSize:12,color:C.muted,marginBottom:14}},"Earnings are calculated at ", e("strong",{style:{color:C.pale}}, "€0.025"), " per source word of completed translations."),
+    e("div",{style:{fontSize:12,color:C.muted,marginBottom:14}},"Earnings are calculated at ", e("strong",{style:{color:C.pale}}, rateLabel), " of completed translations (from stored job payout when available)."),
     e("div",{style:{display:"grid",gridTemplateColumns:"repeat(auto-fit, minmax(200px, 1fr))",gap:14,marginBottom:20}},
       statCard("This month", fmtEur(thisMonth.cents), thisMonth.words+" words · "+(thisMonth.items?.length||0)+" jobs"),
       statCard("All time", fmtEur(totalCents), totalWords+" words · "+items.length+" jobs"),
-      statCard("Rate", "€0.025 / word", "Per source word")
+      statCard("Rate", rateLabel, "Per source word")
     ),
 
     monthGroups.length===0
@@ -664,20 +822,20 @@ function FinanceTab({me,allJobs,isCompact}){
   );
 }
 
-function RevisorView({me,allJobs,tab,setTab,updateJob,claimJob,onLogout}){
+function RevisorView({me,allJobs,tab,setTab,updateJob,claimJob,unclaimJob,focusJobId,setFocusJobId,payoutRate,onLogout}){
   const e=React.createElement;
   const isCompact=!useMedia("(min-width: 768px)");
 
   const counts = {
-    queue: allJobs.filter(j=>j.status==="awaiting_review" && !j.claimedByRevisorId).length,
+    queue: allJobs.filter(isQueuedJob).length,
     mine: allJobs.filter(j=>(j.claimedByRevisorId===me.revisorId || j.completedByRevisorId===me.revisorId) && j.status!=="complete").length
   };
 
   return e("div",{style:{maxWidth:1280,margin:"0 auto",padding:isCompact?"0 16px":"0 20px"}},
     e(Header,{me,tab,setTab,onLogout,counts,isCompact}),
-    tab==="queue" && e(QueueTab,{me,allJobs,claimJob,setTab,isCompact}),
-    tab==="mine" && e(MyAssignmentsTab,{me,allJobs,updateJob,isCompact}),
-    tab==="finance" && e(FinanceTab,{me,allJobs,isCompact})
+    tab==="queue" && e(QueueTab,{me,allJobs,claimJob,setTab,setFocusJobId,isCompact,payoutRate}),
+    tab==="mine" && e(MyAssignmentsTab,{me,allJobs,updateJob,unclaimJob,focusJobId,setFocusJobId,isCompact,payoutRate}),
+    tab==="finance" && e(FinanceTab,{me,allJobs,isCompact,payoutRate})
   );
 }
 

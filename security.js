@@ -263,6 +263,22 @@ function rebuildTranslationFromSentences(sentences, paraMap) {
   return buckets.map((b) => b.join(' ')).filter(Boolean).join('\n\n');
 }
 
+function sanitizeQaFindings(raw) {
+  if (!raw || typeof raw !== 'object') return null;
+  const summary = sanitizeText(raw.summary || '', 2000);
+  const issuesIn = Array.isArray(raw.issues) ? raw.issues.slice(0, 40) : [];
+  const issues = issuesIn.map((item) => {
+    if (!item || typeof item !== 'object') return null;
+    const severity = String(item.severity || '').toLowerCase();
+    return {
+      severity: ['high', 'medium', 'low'].includes(severity) ? severity : 'medium',
+      detail: sanitizeText(item.detail || '', 800)
+    };
+  }).filter((item) => item && item.detail);
+  if (!summary && !issues.length) return null;
+  return { summary: summary || '', issues };
+}
+
 function publicJob(job) {
   if (!job) return null;
   const sourceFile = job.sourceFile && typeof job.sourceFile === 'object'
@@ -279,9 +295,12 @@ function publicJob(job) {
     language: job.language,
     aiTranslation: job.aiTranslation,
     qaOnly: !!job.qaOnly,
+    qaFindings: sanitizeQaFindings(job.qaFindings),
     status: job.status,
     revisedTranslation: job.revisedTranslation || null,
     createdAt: job.createdAt,
+    sourceWordCount: typeof job.sourceWordCount === 'number' ? job.sourceWordCount : undefined,
+    priceCents: typeof job.priceCents === 'number' ? job.priceCents : undefined,
     sourceFile,
     clientEmailMasked: job.clientEmail ? maskEmail(job.clientEmail) : null
   };
@@ -296,6 +315,8 @@ function revisorJob(job) {
     translationSentences: Array.isArray(job.translationSentences) ? job.translationSentences : null,
     sentenceParaMap: Array.isArray(job.sentenceParaMap) ? job.sentenceParaMap : null,
     sourceWordCount: typeof job.sourceWordCount === 'number' ? job.sourceWordCount : undefined,
+    priceCents: typeof job.priceCents === 'number' ? job.priceCents : undefined,
+    payoutCents: typeof job.payoutCents === 'number' ? job.payoutCents : undefined,
     claimedByRevisorId: job.claimedByRevisorId || null,
     claimedAt: job.claimedAt || null,
     completedByRevisorId: job.completedByRevisorId || null,
@@ -458,7 +479,7 @@ async function assertHuman(req, body, { secret, turnstile }) {
   return { ok: true };
 }
 
-function buildClientJob(body) {
+function buildClientJob(body, pricing = {}) {
   const clientId = sanitizeClientId(body.clientId);
   if (!clientId) throw new Error('Invalid client session');
   const language = sanitizeLanguage(body.language);
@@ -492,6 +513,17 @@ function buildClientJob(body) {
     }
   }
 
+  const finalAi = translationSentences?.length
+    ? (rebuildTranslationFromSentences(translationSentences, sentenceParaMap) || aiTranslation)
+    : aiTranslation;
+  const sourceWordCount = (qaOnly ? finalAi : originalText).trim().split(/\s+/).filter(Boolean).length;
+  const clientPerWordEur = Number(pricing.clientPerWordEur);
+  const payoutPerWordCents = Number(pricing.payoutPerWordCents);
+  const rateClient = Number.isFinite(clientPerWordEur) && clientPerWordEur > 0 ? clientPerWordEur : 0.04;
+  const ratePayout = Number.isFinite(payoutPerWordCents) && payoutPerWordCents > 0 ? payoutPerWordCents : 2.5;
+  const priceCents = Math.round(sourceWordCount * rateClient * 100);
+  const payoutCents = Math.round(sourceWordCount * ratePayout);
+
   return {
     id: 'j_' + crypto.randomBytes(12).toString('hex'),
     clientId,
@@ -504,14 +536,15 @@ function buildClientJob(body) {
     translationSentences,
     sentenceParaMap,
     language,
-    aiTranslation: translationSentences?.length
-      ? (rebuildTranslationFromSentences(translationSentences, sentenceParaMap) || aiTranslation)
-      : aiTranslation,
+    aiTranslation: finalAi,
     qaOnly,
+    qaFindings: qaOnly ? sanitizeQaFindings(body.qaFindings) : null,
     status: 'awaiting_review',
     revisedTranslation: null,
     createdAt: Date.now(),
-    sourceWordCount: (qaOnly ? aiTranslation : originalText).trim().split(/\s+/).filter(Boolean).length,
+    sourceWordCount,
+    priceCents,
+    payoutCents,
     claimedByRevisorId: null,
     claimedAt: null,
     completedByRevisorId: null,
@@ -532,6 +565,7 @@ module.exports = {
   publicJob,
   rebuildTranslationFromSentences,
   sanitizeSentenceList,
+  sanitizeQaFindings,
   revisorJob,
   sourceFileForDownload,
   rateLimit,

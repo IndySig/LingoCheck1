@@ -16,6 +16,9 @@ const AUTH_FILE = path.join(__dirname, 'auth.local.json');
 const PASSWORD_MIN_LENGTH = 12;
 
 const PAYOUT_PER_WORD_CENTS = 2.5;
+const CLIENT_PER_WORD_EUR = 0.04;
+const AGENCY_PER_WORD_EUR = 0.10;
+const STALE_CLAIM_MS = 4 * 60 * 60 * 1000;
 const MAX_JSON_BODY = 1024 * 1024;
 const MAX_JOB_BODY = 16 * 1024 * 1024;
 const MAX_TRANSLATE_BODY = 128 * 1024;
@@ -143,6 +146,31 @@ function readAuthFile() {
   } catch {
     return {};
   }
+}
+
+function loadPricingConfig() {
+  const file = readAuthFile();
+  const clientPerWordEur = Number(file.CLIENT_PER_WORD_EUR);
+  const agencyPerWordEur = Number(file.AGENCY_PER_WORD_EUR);
+  const payoutPerWordCents = Number(file.PAYOUT_PER_WORD_CENTS);
+  return {
+    clientPerWordEur: Number.isFinite(clientPerWordEur) && clientPerWordEur > 0 ? clientPerWordEur : CLIENT_PER_WORD_EUR,
+    agencyPerWordEur: Number.isFinite(agencyPerWordEur) && agencyPerWordEur > 0 ? agencyPerWordEur : AGENCY_PER_WORD_EUR,
+    payoutPerWordCents: Number.isFinite(payoutPerWordCents) && payoutPerWordCents > 0 ? payoutPerWordCents : PAYOUT_PER_WORD_CENTS
+  };
+}
+
+function isStaleClaim(job) {
+  if (!job || job.status === 'complete') return false;
+  if (!job.claimedByRevisorId) return false;
+  const claimedAt = typeof job.claimedAt === 'number' ? job.claimedAt : 0;
+  return claimedAt > 0 && (Date.now() - claimedAt) > STALE_CLAIM_MS;
+}
+
+function jobEarningsCents(job, payoutPerWordCents) {
+  if (typeof job.payoutCents === 'number' && Number.isFinite(job.payoutCents)) return Math.round(job.payoutCents);
+  const words = typeof job.sourceWordCount === 'number' ? job.sourceWordCount : countWords(job.originalText || job.aiTranslation || '');
+  return Math.round(words * payoutPerWordCents);
 }
 
 function loadAnthropicApiKey() {
@@ -914,6 +942,69 @@ async function handleTranslate(req, res) {
   }
 }
 
+function parseQaCheckJson(raw) {
+  const text = String(raw || '').trim();
+  const start = text.indexOf('{');
+  const end = text.lastIndexOf('}');
+  if (start === -1 || end <= start) return null;
+  try {
+    return JSON.parse(text.slice(start, end + 1));
+  } catch {
+    return null;
+  }
+}
+
+async function handleQaCheck(req, res) {
+  if (!enforceJsonContentType(req, res)) return;
+  if (!enforceRateLimit(req, res, 'qa-check', { limit: 8, windowMs: 60 * 1000 })) return;
+  const body = await readBodyJson(req, MAX_TRANSLATE_BODY);
+  if (!(await requireHuman(req, res, body))) return;
+
+  const text = security.sanitizeText(body.text);
+  const language = security.sanitizeLanguage(body.language);
+  if (!text) return sendJson(res, 400, { error: 'Missing translation text' });
+  if (!language) return sendJson(res, 400, { error: 'Missing language' });
+
+  const apiKey = loadAnthropicApiKey();
+  if (!apiKey) {
+    return sendJson(res, 200, {
+      checkedTranslation: text,
+      findings: {
+        summary: 'Demo mode — no API key configured. Text passed through unchanged for human review.',
+        issues: []
+      }
+    });
+  }
+
+  const system = [
+    `You are a professional ${language} translation quality checker specializing in AI hallucinations.`,
+    'The user will paste a translation produced by another AI. There may be no English source.',
+    'Check for likely hallucinations and AI artifacts: invented facts, names, numbers, dates, or citations;',
+    'unsupported claims; internal contradictions; generic filler that invents details; obvious machine-translation nonsense.',
+    'Preserve paragraph structure and meaning. Only fix clear problems — do not rewrite style unnecessarily.',
+    'Respond with ONLY valid JSON (no markdown fences) in this exact shape:',
+    '{"checkedTranslation":"...","summary":"one short paragraph","issues":[{"severity":"high|medium|low","detail":"..."}]}',
+    'If nothing serious is wrong, return the original text as checkedTranslation, a brief reassuring summary, and an empty issues array.'
+  ].join(' ');
+
+  try {
+    const raw = await callAnthropicTranslation(system, text, apiKey, 8192);
+    const parsed = parseQaCheckJson(raw);
+    const checkedTranslation = security.sanitizeText(parsed?.checkedTranslation || text);
+    const findings = security.sanitizeQaFindings({
+      summary: parsed?.summary || 'AI quality check complete.',
+      issues: Array.isArray(parsed?.issues) ? parsed.issues : []
+    }) || { summary: 'AI quality check complete.', issues: [] };
+    return sendJson(res, 200, {
+      checkedTranslation: checkedTranslation || text,
+      findings
+    });
+  } catch (e) {
+    console.error('[LingoCheck] QA check failed:', e?.message || e);
+    return sendJson(res, 502, { error: 'Quality check service unavailable' });
+  }
+}
+
 async function handleJobsCreate(req, res) {
   if (!enforceJsonContentType(req, res)) return;
   if (!enforceRateLimit(req, res, 'jobs-create', { limit: 5, windowMs: 60 * 1000 })) return;
@@ -921,7 +1012,7 @@ async function handleJobsCreate(req, res) {
   if (!(await requireHuman(req, res, body))) return;
   let job;
   try {
-    job = security.buildClientJob(body);
+    job = security.buildClientJob(body, loadPricingConfig());
   } catch (err) {
     return sendJson(res, 400, { error: err.message || 'Invalid job' });
   }
@@ -938,13 +1029,38 @@ async function handleRevisorClaim(req, res, id, session) {
   const idx = jobs.findIndex(j => j.id === id);
   if (idx === -1) return sendJson(res, 404, { error: 'Job not found' });
   const job = jobs[idx];
-  if (job.claimedByRevisorId && job.claimedByRevisorId !== session.revisorId) {
+  if (job.status === 'complete') return sendJson(res, 409, { error: 'Job already completed' });
+
+  const ownedByOther = job.claimedByRevisorId && job.claimedByRevisorId !== session.revisorId;
+  if (ownedByOther && !isStaleClaim(job)) {
     return sendJson(res, 409, { error: 'Job already claimed by another revisor' });
+  }
+
+  jobs[idx] = {
+    ...job,
+    status: 'in_progress',
+    claimedByRevisorId: session.revisorId,
+    claimedAt: Date.now()
+  };
+  saveJobs(jobs);
+  return sendJson(res, 200, security.revisorJob(jobs[idx]));
+}
+
+async function handleRevisorUnclaim(req, res, id, session) {
+  const jobs = loadJobs();
+  const idx = jobs.findIndex(j => j.id === id);
+  if (idx === -1) return sendJson(res, 404, { error: 'Job not found' });
+  const job = jobs[idx];
+  if (job.status === 'complete') return sendJson(res, 400, { error: 'Completed jobs cannot be released' });
+  if (!job.claimedByRevisorId) return sendJson(res, 400, { error: 'Job is not claimed' });
+  if (job.claimedByRevisorId !== session.revisorId) {
+    return sendJson(res, 403, { error: 'Only the claiming revisor can release this job' });
   }
   jobs[idx] = {
     ...job,
-    claimedByRevisorId: session.revisorId,
-    claimedAt: job.claimedAt || Date.now()
+    status: 'awaiting_review',
+    claimedByRevisorId: null,
+    claimedAt: null
   };
   saveJobs(jobs);
   return sendJson(res, 200, security.revisorJob(jobs[idx]));
@@ -965,6 +1081,9 @@ async function handleRevisorPatch(req, res, id, session) {
     : job.revisedTranslation;
   const translationSentences = security.sanitizeSentenceList(body.translationSentences);
   const merged = { ...job, revisedTranslation: revised };
+  if (job.status !== 'complete' && job.claimedByRevisorId) {
+    merged.status = 'in_progress';
+  }
   if (translationSentences) {
     merged.translationSentences = translationSentences;
     if (!revised) {
@@ -1033,7 +1152,14 @@ const server = http.createServer(async (req, res) => {
     if (method === 'GET' && pathname === '/api/public-config') {
       if (!enforceRateLimit(req, res, 'public-config', { limit: 60, windowMs: 60 * 1000 })) return;
       const turnstile = security.loadTurnstileConfig(readAuthFile);
-      return sendJson(res, 200, { turnstileSiteKey: turnstile.enabled ? turnstile.siteKey : null });
+      const pricing = loadPricingConfig();
+      return sendJson(res, 200, {
+        turnstileSiteKey: turnstile.enabled ? turnstile.siteKey : null,
+        clientPerWordEur: pricing.clientPerWordEur,
+        agencyPerWordEur: pricing.agencyPerWordEur,
+        payoutPerWordCents: pricing.payoutPerWordCents,
+        staleClaimHours: STALE_CLAIM_MS / (60 * 60 * 1000)
+      });
     }
     if (method === 'GET' && pathname === '/api/challenge') {
       if (!enforceRateLimit(req, res, 'challenge', { limit: 30, windowMs: 60 * 1000 })) return;
@@ -1169,6 +1295,7 @@ const server = http.createServer(async (req, res) => {
     }
     if (method === 'POST' && pathname === '/api/jobs') return await handleJobsCreate(req, res);
     if (method === 'POST' && pathname === '/api/translate') return await handleTranslate(req, res);
+    if (method === 'POST' && pathname === '/api/qa-check') return await handleQaCheck(req, res);
 
     // Revisor (protected) APIs
     if (pathname.startsWith('/api/revisor/')) {
@@ -1186,17 +1313,18 @@ const server = http.createServer(async (req, res) => {
 
       // GET /api/revisor/me/finance
       if (method === 'GET' && pathname === '/api/revisor/me/finance') {
+        const pricing = loadPricingConfig();
         const all = loadJobs();
         const mine = all.filter(j => j.completedByRevisorId === session.revisorId && j.status === 'complete');
         const items = mine.map(j => ({
           id: j.id,
           language: j.language,
           completedAt: j.completedAt || j.createdAt,
-          sourceWordCount: typeof j.sourceWordCount === 'number' ? j.sourceWordCount : countWords(j.originalText),
-          earningsCents: Math.round((typeof j.sourceWordCount === 'number' ? j.sourceWordCount : countWords(j.originalText)) * PAYOUT_PER_WORD_CENTS)
+          sourceWordCount: typeof j.sourceWordCount === 'number' ? j.sourceWordCount : countWords(j.originalText || j.aiTranslation || ''),
+          earningsCents: jobEarningsCents(j, pricing.payoutPerWordCents)
         }));
         return sendJson(res, 200, {
-          ratePerWordCents: PAYOUT_PER_WORD_CENTS,
+          ratePerWordCents: pricing.payoutPerWordCents,
           currency: 'EUR',
           items
         });
@@ -1208,9 +1336,16 @@ const server = http.createServer(async (req, res) => {
         return await handleRevisorClaim(req, res, claimMatch[1], session);
       }
 
+      // POST /api/revisor/jobs/:id/unclaim
+      const unclaimMatch = pathname.match(/^\/api\/revisor\/jobs\/([^\/]+)\/unclaim$/);
+      if (method === 'POST' && unclaimMatch) {
+        return await handleRevisorUnclaim(req, res, unclaimMatch[1], session);
+      }
+
       // PATCH /api/revisor/jobs/:id
       if (method === 'PATCH' && pathname.startsWith('/api/revisor/jobs/')) {
         const id = pathname.slice('/api/revisor/jobs/'.length);
+        if (id.includes('/')) return sendJson(res, 404, { error: 'Not found' });
         return await handleRevisorPatch(req, res, id, session);
       }
 

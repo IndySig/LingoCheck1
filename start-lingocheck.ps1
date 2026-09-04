@@ -14,9 +14,28 @@ function Stop-PortListener([int]$p) {
   }
 }
 
+function Resolve-NodeExe {
+  $cmd = Get-Command node -ErrorAction SilentlyContinue
+  if ($cmd -and $cmd.Source) { return $cmd.Source }
+
+  $candidates = @(
+    "$env:ProgramFiles\nodejs\node.exe",
+    "${env:ProgramFiles(x86)}\nodejs\node.exe",
+    "$env:LOCALAPPDATA\Programs\nodejs\node.exe",
+    "$env:ProgramFiles\cursor\resources\app\resources\helpers\node.exe",
+    "$env:LOCALAPPDATA\Programs\cursor\resources\app\resources\helpers\node.exe"
+  )
+  foreach ($path in $candidates) {
+    if ($path -and (Test-Path -LiteralPath $path)) { return $path }
+  }
+
+  throw "Node.js was not found. Install it from https://nodejs.org (LTS) and reopen the terminal."
+}
+
 Stop-PortListener -p $Port
 
 $env:PORT = "$Port"
 Set-Location $PSScriptRoot
-node ".\server.js"
+$nodeExe = Resolve-NodeExe
+& $nodeExe ".\server.js"
 

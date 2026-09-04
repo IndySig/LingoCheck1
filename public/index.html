@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>LingoCheck — AI + Human Translation</title>
+<title>LingoCheck — Check your AI translation</title>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/react/18.2.0/umd/react.production.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.2.0/umd/react-dom.production.min.js"></script>
 <script type="module">
@@ -70,8 +70,8 @@ const st={
   muted:{fontSize:13,color:C.muted}
 };
 
-const LINGO_PER_WORD_EUR = 0.04;
-const AGENCY_PER_WORD_EUR = 0.10;
+const DEFAULT_LINGO_PER_WORD_EUR = 0.04;
+const DEFAULT_AGENCY_PER_WORD_EUR = 0.10;
 
 function formatEuro(amount){
   const n = Math.round(Number(amount || 0) * 100) / 100;
@@ -536,10 +536,16 @@ function ClientView({clientId}){
   const cardPad=isCompact?18:28;
   const cardStyle=(extra={})=>({...st.card,padding:cardPad,...extra});
   const[turnstileSiteKey,setTurnstileSiteKey]=useState(null);
-  const[useOwnAi,setUseOwnAi]=useState(false);
+  const[useOwnAi,setUseOwnAi]=useState(true); // default: check an existing translation
   const[clientEmail,setClientEmail]=useState(()=>savedEmail());
   const[showFullDraft,setShowFullDraft]=useState(false);
   const[downloadNote,setDownloadNote]=useState("");
+  const[qaFindings,setQaFindings]=useState(null);
+  const[rates,setRates]=useState({
+    clientPerWordEur: DEFAULT_LINGO_PER_WORD_EUR,
+    agencyPerWordEur: DEFAULT_AGENCY_PER_WORD_EUR,
+    payoutPerWordCents: 2.5
+  });
   const fileRef=useRef();
   const sourceFileB64Ref=useRef(null);
   const textSegmentsRef=useRef([]);
@@ -567,7 +573,14 @@ function ClientView({clientId}){
     (async()=>{
       try{
         const cfg=await apiFetch("/api/public-config");
-        if(alive) setTurnstileSiteKey(cfg.turnstileSiteKey||null);
+        if(alive){
+          setTurnstileSiteKey(cfg.turnstileSiteKey||null);
+          setRates(prev=>({
+            clientPerWordEur: typeof cfg.clientPerWordEur==="number"?cfg.clientPerWordEur:prev.clientPerWordEur,
+            agencyPerWordEur: typeof cfg.agencyPerWordEur==="number"?cfg.agencyPerWordEur:prev.agencyPerWordEur,
+            payoutPerWordCents: typeof cfg.payoutPerWordCents==="number"?cfg.payoutPerWordCents:prev.payoutPerWordCents
+          }));
+        }
       }catch{}
     })();
     refreshChallenge();
@@ -669,8 +682,10 @@ function ClientView({clientId}){
   },[]);
 
   const words=inputText.trim().split(/\s+/).filter(Boolean).length;
-  const lingoPrice=words*LINGO_PER_WORD_EUR;
-  const agencyPrice=words*AGENCY_PER_WORD_EUR;
+  const lingoPerWord=rates.clientPerWordEur||DEFAULT_LINGO_PER_WORD_EUR;
+  const agencyPerWord=rates.agencyPerWordEur||DEFAULT_AGENCY_PER_WORD_EUR;
+  const lingoPrice=words*lingoPerWord;
+  const agencyPrice=words*agencyPerWord;
   const savings=Math.max(0, agencyPrice-lingoPrice);
 
   function botFields(){
@@ -765,8 +780,9 @@ function ClientView({clientId}){
         translationSentences: qaOnly ? null : (pack?.translationSentences || null),
         sentenceParaMap: qaOnly ? null : (pack ? pack.paraMap : null),
         language,
-        aiTranslation: qaOnly ? inputText.trim() : aiResult,
+        aiTranslation: qaOnly ? (aiResult.trim() || inputText.trim()) : aiResult,
         qaOnly,
+        qaFindings: qaOnly ? qaFindings : null,
         sourceFile: { name, ext, fileB64: sourceFile?.fileB64 || sourceFileB64Ref.current || null },
         ...botFields()
       })});
@@ -787,11 +803,33 @@ function ClientView({clientId}){
 
   async function handleCheck(){
     if(!inputText.trim()){setError("Please paste or upload the translation first.");return;}
-    await handleSend({qaOnly:true});
+    setError("");setStage("checking");setQaFindings(null);
+    try{
+      const payload=()=>({
+        text: inputText.trim(),
+        language,
+        ...botFields()
+      });
+      if(!challengeRef.current) await refreshChallenge();
+      let data;
+      try{
+        data=await apiFetch("/api/qa-check",{method:"POST",body:JSON.stringify(payload())});
+      }catch(first){
+        const msg=String(first.message||"");
+        if(/Verification expired|Confirm you are human/i.test(msg)){
+          await refreshChallenge();
+          data=await apiFetch("/api/qa-check",{method:"POST",body:JSON.stringify(payload())});
+        }else throw first;
+      }
+      setAiResult(data.checkedTranslation || inputText.trim());
+      setQaFindings(data.findings || {summary:"AI quality check complete.",issues:[]});
+      setStage("checked");setShowFullDraft(false);
+      refreshChallenge();
+    }catch(e){setError("Quality check failed: "+e.message);setStage("idle");refreshChallenge();}
   }
 
   function handleReset(){
-    setStage("idle");setInputText("");setAiResult("");setCurrentJob(null);setError("");setSourceFile(null);setFileScan(null);setUseOwnAi(false);setShowFullDraft(false);
+    setStage("idle");setInputText("");setAiResult("");setCurrentJob(null);setError("");setSourceFile(null);setFileScan(null);setUseOwnAi(true);setShowFullDraft(false);setQaFindings(null);
     sourceFileB64Ref.current=null;textSegmentsRef.current=[];sentencePackRef.current=null;
     deliveryTokenRef.current="";
     try{ localStorage.removeItem("lc_open_job"); }catch{}
@@ -799,10 +837,12 @@ function ClientView({clientId}){
     if(fileRef.current) fileRef.current.value="";
   }
 
-  function onToggleOwnAi(ev){
-    setUseOwnAi(!!ev.target.checked);
+  function onToggleFullTranslate(ev){
+    const wantFull=!!ev.target.checked;
+    setUseOwnAi(!wantFull);
     setInputText("");
     setAiResult("");
+    setQaFindings(null);
     setError("");
     setFileScan(null);
     setSourceFile(null);
@@ -973,20 +1013,34 @@ function ClientView({clientId}){
       e("div",{style:{display:"grid",gridTemplateColumns:isWide?"1.08fr 0.92fr":"1fr",gap:28,alignItems:"start"}},
         e("div",null,
           e("h1",{style:{fontFamily:"inherit",fontSize:isCompact?32:(isWide?46:40),fontWeight:400,lineHeight:1.12,color:C.text,marginBottom:14,maxWidth:isWide?640:"100%"}},
-            "Translation made ",e("em",{style:{fontStyle:"italic",color:C.accent}},"fast")," and reliable"),
-          e("p",{style:{fontSize:15,color:C.muted,lineHeight:1.7,maxWidth:520,marginBottom:28}},"AI translates instantly. Our human revisor refines every word. Agency quality at a fraction of the cost."),
+            useOwnAi
+              ? e(React.Fragment,null,"Already translated? We’ll ",e("em",{style:{fontStyle:"italic",color:C.accent}},"check")," it")
+              : e(React.Fragment,null,"Translation made ",e("em",{style:{fontStyle:"italic",color:C.accent}},"fast")," and reliable")
+          ),
+          e("p",{style:{fontSize:15,color:C.muted,lineHeight:1.7,maxWidth:520,marginBottom:28}},
+            useOwnAi
+              ?"Paste the AI translation you already have. We scan it for mistakes and hallucinations, then a certified translator proofreads every word."
+              :"Need a full translation from English? Our AI drafts instantly, then a human revisor refines every word."
+          ),
           (()=>{
             const ico=(...paths)=>e("svg",{width:18,height:18,viewBox:"0 0 24 24",fill:"none",stroke:"currentColor",strokeWidth:1.75,strokeLinecap:"round",strokeLinejoin:"round","aria-hidden":"true",focusable:"false",style:{display:"block"}},
               ...paths.map((d,i)=>e("path",{key:i,d}))
             );
             const badge=child=>e("div",{"aria-hidden":"true",style:{width:32,height:32,borderRadius:8,flexShrink:0,display:"flex",alignItems:"center",justifyContent:"center",background:"rgba(109,79,216,0.08)",border:"1px solid rgba(109,79,216,0.16)",color:C.accent}},child);
-            const steps=[
-              [badge(ico("M15 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7Z","M14 2v4a2 2 0 0 0 2 2h4","M12 12v6","M15 15l-3-3-3 3")),"Upload","Paste your text or a file"],
-              [badge(ico("M4 4h16v16H4Z","M9 9h6v6H9Z","M9 1v3","M15 1v3","M9 20v3","M15 20v3","M1 9h3","M1 15h3","M20 9h3","M20 15h3")),"AI draft","Instant first translation"],
-              [badge(ico("M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2","M9 11a4 4 0 1 0 0-8 4 4 0 0 0 0 8","M16 11l2 2 4-4")),"Human revisor","A certified translator checks every word"],
-              [badge(ico("M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4","M7 10l5 5 5-5","M12 15V3")),"Delivered","Download the finished file"]
-            ];
-            const flowLabel=e("div",{style:{fontSize:11,fontWeight:600,letterSpacing:"1.1px",textTransform:"uppercase",color:C.accent,marginBottom:isCompact?12:10}},"How it works");
+            const steps=useOwnAi
+              ?[
+                [badge(ico("M15 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7Z","M14 2v4a2 2 0 0 0 2 2h4","M12 12v6","M15 15l-3-3-3 3")),"Upload","Paste your AI translation or a file"],
+                [badge(ico("M4 4h16v16H4Z","M9 9h6v6H9Z","M9 1v3","M15 1v3","M9 20v3","M15 20v3","M1 9h3","M1 15h3","M20 9h3","M20 15h3")),"AI check","We scan for mistakes and hallucinations"],
+                [badge(ico("M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2","M9 11a4 4 0 1 0 0-8 4 4 0 0 0 0 8","M16 11l2 2 4-4")),"Human revisor","A certified translator checks every word"],
+                [badge(ico("M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4","M7 10l5 5 5-5","M12 15V3")),"Delivered","Download the corrected file"]
+              ]
+              :[
+                [badge(ico("M15 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7Z","M14 2v4a2 2 0 0 0 2 2h4","M12 12v6","M15 15l-3-3-3 3")),"Upload","Paste your English text or a file"],
+                [badge(ico("M4 4h16v16H4Z","M9 9h6v6H9Z","M9 1v3","M15 1v3","M9 20v3","M15 20v3","M1 9h3","M1 15h3","M20 9h3","M20 15h3")),"AI draft","Instant first translation"],
+                [badge(ico("M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2","M9 11a4 4 0 1 0 0-8 4 4 0 0 0 0 8","M16 11l2 2 4-4")),"Human revisor","A certified translator checks every word"],
+                [badge(ico("M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4","M7 10l5 5 5-5","M12 15V3")),"Delivered","Download the finished file"]
+              ];
+            const flowLabel=e("div",{style:{fontSize:11,fontWeight:600,letterSpacing:"1.1px",textTransform:"uppercase",color:C.accent,marginBottom:isCompact?12:10}},useOwnAi?"How quality check works":"How full translation works");
             const stepNum=(n)=>e("div",{"aria-hidden":"true",style:{width:isCompact?28:24,height:isCompact?28:24,borderRadius:"50%",flexShrink:0,display:"flex",alignItems:"center",justifyContent:"center",background:"#ffffff",border:`2px solid ${C.accent}`,color:C.accent,fontSize:12,fontWeight:700,lineHeight:1,zIndex:1}},n);
             const chevron=e("svg",{width:16,height:16,viewBox:"0 0 16 16","aria-hidden":"true",focusable:"false",style:{flexShrink:0,display:"block",color:C.accent,opacity:0.85}},
               e("path",{d:"M6 3.5 L11.5 8 L6 12.5",fill:"none",stroke:"currentColor",strokeWidth:1.7,strokeLinecap:"round",strokeLinejoin:"round"})
@@ -1030,25 +1084,53 @@ function ClientView({clientId}){
               flowLabel,
               e("div",{style:{display:"flex",flexDirection:"row",alignItems:"flex-start",gap:4,width:"100%"}},...items)
             );
-          })()
+          })(),
+          e("div",{style:{marginTop:16,maxWidth:640}},
+            e("div",{style:{display:"flex",alignItems:"center",justifyContent:"space-between",gap:10,marginBottom:10,flexWrap:"wrap"}},
+              e("span",{style:{...st.label,marginBottom:0}},"Price estimate"),
+              e("span",{style:{fontSize:11,color:C.muted}},formatEuro(lingoPerWord)," / word")
+            ),
+            e("div",{style:{display:"grid",gridTemplateColumns:isCompact?"1fr":"repeat(3, 1fr)",gap:10,marginBottom:words?10:0}},
+              [
+                [words,"Words",useOwnAi?"Translation word count":"Source word count"],
+                [formatEuro(lingoPrice),"Your price","LingoCheck price for this job"],
+                [formatEuro(agencyPrice),"Typical agency price","Average a traditional translation agency would charge for the same job. Comparison only."]
+              ].map(([v,l,hint],i)=>
+                e("div",{key:i,title:hint,style:{background:C.soft,border:`1px solid ${C.border}`,borderRadius:10,padding:"12px 14px",textAlign:"center"}},
+                  e("div",{style:{fontFamily:"inherit",fontSize:20,color:words?C.accent:C.muted,marginBottom:3}},v),
+                  e("div",{style:{fontSize:11,fontWeight:600,color:C.text,display:"flex",alignItems:"center",justifyContent:"center",gap:4}},
+                    l,
+                    i===2&&e("span",{"aria-label":hint,title:hint,style:{display:"inline-flex",alignItems:"center",justifyContent:"center",width:14,height:14,borderRadius:"50%",border:`1px solid ${C.border}`,fontSize:9,fontWeight:700,color:C.muted,lineHeight:1,cursor:"help"}},"i")
+                  ),
+                  e("div",{style:{fontSize:10,color:C.muted,marginTop:4,lineHeight:1.35}},i===2?"Comparison only":"\u00a0")
+                )
+              )
+            ),
+            words>0
+              ?e("div",{role:"status",style:{background:C.greenBg,border:`1px solid ${C.greenBorder}`,borderRadius:10,padding:"12px 14px",textAlign:"center"}},
+                e("div",{style:{fontFamily:"inherit",fontSize:isCompact?16:18,fontWeight:600,color:C.green,lineHeight:1.3}},"Save ",formatEuro(savings)," vs typical agency rate"),
+                e("div",{style:{fontSize:11,color:C.muted,marginTop:3}},"Updates as you paste or upload text")
+              )
+              :e("div",{style:{fontSize:12,color:C.muted,lineHeight:1.5,marginTop:2}},"Paste or upload text to see your live estimate.")
+          )
         ),
 
         e("div",null,
-          e("label",{htmlFor:"use-own-ai",style:{display:"flex",alignItems:"flex-start",gap:10,marginBottom:14,cursor:"pointer",userSelect:"none",padding:"12px 14px",background:useOwnAi?"rgba(109,79,216,0.06)":C.soft,border:`1px solid ${useOwnAi?"rgba(109,79,216,0.28)":C.border}`,borderRadius:12}},
-            e("input",{id:"use-own-ai",type:"checkbox",checked:useOwnAi,onChange:onToggleOwnAi,style:{marginTop:3,width:16,height:16,accentColor:C.accent,flexShrink:0,cursor:"pointer"}}),
+          e("label",{htmlFor:"full-translate",style:{display:"flex",alignItems:"flex-start",gap:10,marginBottom:14,cursor:"pointer",userSelect:"none",padding:"12px 14px",background:!useOwnAi?"rgba(109,79,216,0.06)":C.soft,border:`1px solid ${!useOwnAi?"rgba(109,79,216,0.28)":C.border}`,borderRadius:12}},
+            e("input",{id:"full-translate",type:"checkbox",checked:!useOwnAi,onChange:onToggleFullTranslate,style:{marginTop:3,width:16,height:16,accentColor:C.accent,flexShrink:0,cursor:"pointer"}}),
             e("span",null,
-              e("span",{style:{display:"block",fontSize:13,fontWeight:600,color:C.text,marginBottom:3}},"Use own AI translation for LingoCheck"),
-              e("span",{style:{display:"block",fontSize:12,color:C.muted,lineHeight:1.45}},useOwnAi?"Quality check only — we will not generate a new translation.":"Leave unchecked to let LingoCheck translate first, then send to a revisor.")
+              e("span",{style:{display:"block",fontSize:13,fontWeight:600,color:C.text,marginBottom:3}},"Need a full translation from LingoCheck?"),
+              e("span",{style:{display:"block",fontSize:12,color:C.muted,lineHeight:1.45}},!useOwnAi?"We’ll translate from English first, then send to a revisor.":"Leave unchecked to check a translation you already have.")
             )
           ),
         e("div",{style:{...cardStyle(),border:useOwnAi?"1px solid rgba(109,79,216,0.28)":st.card.border}},
           e("div",{style:{display:"flex",alignItems:"center",justifyContent:"space-between",gap:10,marginBottom:12,flexWrap:"wrap"}},
-            e("span",{style:st.label},useOwnAi?"Your translation":"Your text"),
-            useOwnAi&&e("span",{style:{fontSize:10,fontWeight:600,letterSpacing:"0.8px",textTransform:"uppercase",color:C.accent,background:"rgba(109,79,216,0.08)",border:"1px solid rgba(109,79,216,0.18)",padding:"4px 10px",borderRadius:999}},"QA only")
+            e("span",{style:st.label},useOwnAi?"Your translation":"Your English text"),
+            e("span",{style:{fontSize:10,fontWeight:600,letterSpacing:"0.8px",textTransform:"uppercase",color:C.accent,background:"rgba(109,79,216,0.08)",border:"1px solid rgba(109,79,216,0.18)",padding:"4px 10px",borderRadius:999}},useOwnAi?"Checking your translation":"Full translation")
           ),
           useOwnAi
-            ?e("div",{style:{background:C.amberBg,border:`1px solid ${C.amberBorder}`,borderRadius:10,padding:"10px 14px",marginBottom:16,fontSize:12,color:C.amber,lineHeight:1.55}},"Paste or upload the translation you already have. A certified translator will proofread it. LingoCheck will not run its own AI translation.")
-            :null,
+            ?e("div",{style:{background:C.soft,border:`1px solid ${C.border}`,borderRadius:10,padding:"10px 14px",marginBottom:16,fontSize:12,color:C.muted,lineHeight:1.55}},"Paste or upload the translation you already have. Our AI will scan it for mistakes and hallucinations, then a certified translator will proofread it.")
+            :e("div",{style:{background:C.soft,border:`1px solid ${C.border}`,borderRadius:10,padding:"10px 14px",marginBottom:16,fontSize:12,color:C.muted,lineHeight:1.55}},"Paste English source text. We’ll draft a translation, then a revisor will refine it."),
           useOwnAi
             ?e("div",{style:{display:"flex",alignItems:"center",gap:10,marginBottom:16}},
               e("span",{style:{fontSize:12,color:C.muted,whiteSpace:"nowrap"}},"Translation language"),
@@ -1064,7 +1146,7 @@ function ClientView({clientId}){
               )
             ),
           e("div",{style:{position:"relative",marginBottom:14}},
-            e("textarea",{style:{...st.ta,minHeight:sourceFile?88:(isWide?220:160),maxHeight:sourceFile?140:(isWide?280:220),overflow:"auto"},placeholder:useOwnAi?'Paste the translation here…':"Paste your text here… e.g. \"We are looking for a reliable translation partner.\"",value:inputText,onChange:ev=>{setInputText(ev.target.value);if(fileScan&&fileScan.fit===false)setFileScan(null);},maxLength:25000}),
+            e("textarea",{style:{...st.ta,minHeight:sourceFile?88:(isWide?220:160),maxHeight:sourceFile?140:(isWide?280:220),overflow:"auto"},placeholder:useOwnAi?'Paste the translation here…':"Paste your English text here… e.g. \"We are looking for a reliable translation partner.\"",value:inputText,onChange:ev=>{setInputText(ev.target.value);if(fileScan&&fileScan.fit===false)setFileScan(null);},maxLength:25000}),
             e("span",{style:{position:"absolute",bottom:10,right:12,fontSize:11,color:C.muted}},words," words")
           ),
           e("div",{style:{display:"flex",alignItems:isCompact?"stretch":"center",gap:10,marginBottom:20,flexDirection:isCompact?"column":"row",flexWrap:"wrap"}},
@@ -1078,7 +1160,7 @@ function ClientView({clientId}){
           ),
           e("label",{style:{...st.label,marginBottom:8}},"Email for delivery"),
           e("input",{type:"email",autoComplete:"email",placeholder:"you@example.com",value:clientEmail,onChange:ev=>setClientEmail(ev.target.value),style:{...st.ta,minHeight:0,resize:"none",marginBottom:8,padding:"10px 14px"}}),
-          e("div",{style:{fontSize:12,color:C.muted,marginBottom:16,lineHeight:1.5}},"We’ll email the finished translation here. You can close this page after sending."),
+          e("div",{style:{fontSize:12,color:C.muted,marginBottom:16,lineHeight:1.5}},useOwnAi?"We’ll email the corrected translation here. You can close this page after sending.":"We’ll email the finished translation here. You can close this page after sending."),
           e("input",{id:"lc_hp_fax",className:"hp",tabIndex:-1,autoComplete:"off",name:"lc_hp_fax",defaultValue:""}),
           e("div",{ref:turnstileRef,style:{marginBottom:turnstileSiteKey?14:0,minHeight:turnstileSiteKey?65:0}}),
           error&&e("div",{style:{fontSize:12,color:C.error,marginBottom:12}},error),
@@ -1094,6 +1176,78 @@ function ClientView({clientId}){
       e("div",{style:{marginBottom:20}},e(Spinner,{size:26})),
       e("div",{style:{fontFamily:"inherit",fontSize:24,color:C.text,marginBottom:8}},"AI is translating…"),
       e("div",{style:st.muted},"Processing your text with our language model")
+    ),
+
+    stage==="checking"&&e("div",{style:{...cardStyle(),textAlign:"center",padding:isCompact?"48px 20px":"64px 32px",animation:"fadeUp 0.25s ease"}},
+      e("div",{style:{marginBottom:20}},e(Spinner,{size:26})),
+      e("div",{style:{fontFamily:"inherit",fontSize:24,color:C.text,marginBottom:8}},"Checking for hallucinations…"),
+      e("div",{style:st.muted},"Our AI is scanning your translation before a human revisor sees it")
+    ),
+
+    stage==="checked"&&e("div",{style:{animation:"fadeUp 0.25s ease"}},
+      e("div",{style:{...cardStyle(),border:`1px solid rgba(109,79,216,0.28)`,marginBottom:16}},
+        e("div",{style:{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:12}},
+          e("span",{style:st.label},"AI quality check — ",language),
+          e("span",{style:{fontSize:11,background:"rgba(109,79,216,0.08)",border:"1px solid rgba(109,79,216,0.18)",color:C.accent,borderRadius:999,padding:"3px 10px"}},"Hallucination scan")
+        ),
+        e("div",{style:{display:"grid",gridTemplateColumns:isCompact?"1fr":"repeat(3, 1fr)",gap:10,marginBottom:12}},
+          [
+            [words,"Words","Translation word count"],
+            [formatEuro(lingoPrice),"Your price","LingoCheck price for this job"],
+            [formatEuro(agencyPrice),"Typical agency price","Average a traditional translation agency would charge for the same job. Comparison only — not editable."]
+          ].map(([v,l,hint],i)=>
+            e("div",{key:i,title:hint,style:{background:C.soft,border:`1px solid ${C.border}`,borderRadius:10,padding:"12px 14px",textAlign:"center"}},
+              e("div",{style:{fontFamily:"inherit",fontSize:20,color:C.accent,marginBottom:3}},v),
+              e("div",{style:{fontSize:11,fontWeight:600,color:C.text,display:"flex",alignItems:"center",justifyContent:"center",gap:4}},
+                l,
+                i===2&&e("span",{"aria-label":hint,title:hint,style:{display:"inline-flex",alignItems:"center",justifyContent:"center",width:14,height:14,borderRadius:"50%",border:`1px solid ${C.border}`,fontSize:9,fontWeight:700,color:C.muted,lineHeight:1,cursor:"help"}},"i")
+              ),
+              e("div",{style:{fontSize:10,color:C.muted,marginTop:4,lineHeight:1.35}},i===2?"Comparison only":"\u00a0")
+            )
+          )
+        ),
+        e("div",{role:"status",style:{background:C.greenBg,border:`1px solid ${C.greenBorder}`,borderRadius:10,padding:"14px 16px",marginBottom:16,textAlign:"center"}},
+          e("div",{style:{fontFamily:"inherit",fontSize:isWide?22:18,fontWeight:600,color:C.green,lineHeight:1.3}},"Save ",formatEuro(savings)," with LingoCheck!"),
+          e("div",{style:{fontSize:11,color:C.muted,marginTop:4}},"Versus the typical agency rate for this job")
+        ),
+        qaFindings&&e("div",{style:{background:C.amberBg,border:`1px solid ${C.amberBorder}`,borderRadius:10,padding:"12px 16px",marginBottom:16}},
+          e("div",{style:{fontSize:12,fontWeight:600,color:C.amber,marginBottom:6}},"AI check summary"),
+          e("div",{style:{fontSize:12,color:C.amber,lineHeight:1.55}},qaFindings.summary||"AI quality check complete."),
+          Array.isArray(qaFindings.issues)&&qaFindings.issues.length>0&&e("ul",{style:{margin:"10px 0 0",paddingLeft:18,fontSize:12,color:C.amber,lineHeight:1.55}},
+            qaFindings.issues.map((issue,i)=>e("li",{key:i,style:{marginBottom:4}},
+              e("strong",{style:{textTransform:"uppercase",letterSpacing:"0.4px",fontSize:10}},issue.severity||"note"),
+              " — ",issue.detail
+            ))
+          )
+        ),
+        e("div",{style:{background:C.soft,border:`1px solid ${C.border}`,borderRadius:10,padding:"12px 16px",marginBottom:16,fontSize:12,color:C.muted,lineHeight:1.55}},"Next, a certified translator will proofread the checked text. Approve below to send it for human review."),
+        e("label",{style:{...st.label,marginBottom:8}},"Email for delivery"),
+        e("input",{type:"email",autoComplete:"email",placeholder:"you@example.com",value:clientEmail,onChange:ev=>setClientEmail(ev.target.value),style:{...st.ta,minHeight:0,resize:"none",marginBottom:8,padding:"10px 14px"}}),
+        e("div",{style:{fontSize:12,color:C.muted,marginBottom:16,lineHeight:1.5}},"We’ll send the reviewed file to this address when it’s ready."),
+        e("button",{onClick:()=>handleSend({qaOnly:true}),style:{...st.btn,width:"100%",padding:14,background:C.green,fontSize:15,color:C.white}},
+          "✓ Approve & Send to Revisor  ·  ",e("span",{style:{opacity:0.8,fontSize:12}},"demo: skip payment")
+        ),
+        error&&e("div",{style:{fontSize:12,color:C.error,marginTop:12}},error)
+      ),
+      e("div",{style:{...cardStyle(),marginBottom:14}},
+        e("div",{style:{display:"flex",alignItems:"center",justifyContent:"space-between",gap:10,marginBottom:showFullDraft?12:0}},
+          e("span",{style:{...st.label,marginBottom:0}},"Document text"),
+          e("button",{onClick:()=>setShowFullDraft(v=>!v),style:{...st.btn,background:"transparent",border:`1px solid ${C.border}`,color:C.muted,padding:"6px 12px",fontSize:12}},showFullDraft?"Hide text":"Show submitted and checked text")
+        ),
+        showFullDraft
+          ?e("div",{style:{display:"grid",gridTemplateColumns:isWide?"1fr 1fr":"1fr",gap:14}},
+            e("div",null,
+              e("div",{style:{fontSize:11,color:C.muted,letterSpacing:"1px",textTransform:"uppercase",marginBottom:8}},"Your submitted translation"),
+              e("div",{style:{fontSize:13,color:C.muted,lineHeight:1.75,whiteSpace:"pre-wrap",maxHeight:280,overflow:"auto",padding:12,border:`1px solid ${C.border}`,borderRadius:10,background:C.soft}},inputText)
+            ),
+            e("div",null,
+              e("div",{style:{fontSize:11,color:C.accent,letterSpacing:"1px",textTransform:"uppercase",marginBottom:8}},"After AI check — ",language),
+              e("div",{style:{fontSize:13,color:C.text,lineHeight:1.75,whiteSpace:"pre-wrap",maxHeight:280,overflow:"auto",padding:12,border:`1px solid ${C.border}`,borderRadius:10,background:C.soft}},aiResult)
+            )
+          )
+          :e("div",{style:{fontSize:12,color:C.muted,lineHeight:1.55,marginTop:10}},sourceFile?.name?("Uploaded "+sourceFile.name+" · "+words+" words. Open only if you want to compare the checked draft."):(words+" words ready for review. Open only if you want to compare the checked draft."))
+      ),
+      e("button",{onClick:handleReset,style:{...st.btn,background:"transparent",border:`1px solid ${C.border}`,color:C.muted,padding:"8px 16px",fontSize:12}},"← Start over")
     ),
 
     stage==="translated"&&e("div",{style:{animation:"fadeUp 0.25s ease"}},
@@ -1153,12 +1307,18 @@ function ClientView({clientId}){
     ),
 
     stage==="sent"&&e("div",{style:{...cardStyle(),textAlign:"center",padding:isCompact?"48px 20px":"64px 32px",border:"1px solid rgba(109,79,216,0.22)",animation:"glow 2.4s ease-in-out infinite, fadeUp 0.25s ease"}},
-      e("div",{style:{fontSize:42,marginBottom:18}},"👁"),
-      e("div",{style:{fontFamily:"inherit",fontSize:isCompact?22:26,color:C.text,marginBottom:10}},currentJob?.qaOnly?"Awaiting quality check":"Awaiting revisor"),
+      e("div",{style:{fontSize:42,marginBottom:18}},currentJob?.status==="in_progress"?"✍️":"👁"),
+      e("div",{style:{fontFamily:"inherit",fontSize:isCompact?22:26,color:C.text,marginBottom:10}},
+        currentJob?.status==="in_progress"
+          ?(currentJob?.qaOnly?"Revisor is reviewing":"Revisor is working on it")
+          :(currentJob?.qaOnly?"Awaiting quality check":"Awaiting revisor")
+      ),
       e("div",{style:{...st.muted,maxWidth:380,margin:"0 auto 28px",lineHeight:1.7}},
-        currentJob?.qaOnly
-          ?"Your translation has been sent to a certified translator for proofreading."
-          :"Your translation has been sent to our revisor. They will check and refine it.",
+        currentJob?.status==="in_progress"
+          ?"A certified translator has claimed your job and is reviewing it now."
+          :(currentJob?.qaOnly
+            ?"Your translation has been sent to a certified translator for proofreading."
+            :"Your translation has been sent to our revisor. They will check and refine it."),
         " We’ll email ",
         e("strong",{style:{color:C.text}},currentJob?.clientEmailMasked||"you"),
         " when it’s ready — you can close this page."
@@ -1197,10 +1357,10 @@ function ClientView({clientId}){
         downloadNote&&e("div",{style:{fontSize:12,color:C.muted,lineHeight:1.55,marginTop:12,padding:"10px 12px",background:C.soft,border:`1px solid ${C.border}`,borderRadius:10}},downloadNote),
         error&&e("div",{style:{fontSize:12,color:C.error,marginTop:12}},error)
       ),
-      e("button",{onClick:handleReset,style:{...st.btn,background:"transparent",border:`1px solid ${C.border}`,color:C.muted,padding:"8px 16px",fontSize:12}},"← Translate another document")
+      e("button",{onClick:handleReset,style:{...st.btn,background:"transparent",border:`1px solid ${C.border}`,color:C.muted,padding:"8px 16px",fontSize:12}},"← Check another translation")
     ),
 
-    e("div",{style:{textAlign:"center",marginTop:56,fontSize:10,color:"#b0a9c0",letterSpacing:"0.5px"}},"LINGOCHECK · AI + HUMAN TRANSLATION · INVESTOR DEMO")
+    e("div",{style:{textAlign:"center",marginTop:56,fontSize:10,color:"#b0a9c0",letterSpacing:"0.5px"}},"LINGOCHECK · CHECK YOUR AI TRANSLATION · INVESTOR DEMO")
   ));
 }
 
