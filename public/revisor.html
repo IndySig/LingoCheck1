@@ -7,40 +7,89 @@
 <script src="text-segments.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/react/18.2.0/umd/react.production.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.2.0/umd/react-dom.production.min.js"></script>
-<link href="https://fonts.googleapis.com/css2?family=Kufam:ital,wght@0,400;0,500;0,600;0,700;1,400&display=swap" rel="stylesheet">
+<link href="https://fonts.googleapis.com/css2?family=Kufam:ital,wght@0,400;0,500;0,600;0,700;1,400&family=Manrope:wght@400;500;600;700&display=swap" rel="stylesheet">
 <style>
   :root{
-    --bg:#ffffff;
-    --ink:#1c1430;
-    --muted:#6b6480;
+    --bg:#efe8dc;
+    --ink:#2a2438;
+    --muted:#6a6178;
     --accent:#6d4fd8;
-    --border:rgba(92,70,168,0.14);
+    --lilac:#d9d0f5;
+    --border:rgba(42,36,56,0.10);
+    --soft:rgba(255,255,255,0.55);
+    --ease:cubic-bezier(0.22, 1, 0.36, 1);
   }
   *{margin:0;padding:0;box-sizing:border-box;}
   body{
-    background:
-      radial-gradient(720px 280px at 10% -12%, rgba(109,79,216,0.07), transparent 58%),
-      #ffffff;
+    background:var(--bg);
     color:var(--ink);
-    font-family:'Kufam',system-ui,sans-serif;
+    font-family:'Manrope',system-ui,sans-serif;
     font-weight:400;
     min-height:100vh;
     -webkit-font-smoothing:antialiased;
+    text-rendering:optimizeLegibility;
+    overflow-x:hidden;
   }
+  body::before,body::after{
+    content:"";
+    position:fixed;
+    pointer-events:none;
+    z-index:0;
+    border-radius:50%;
+    filter:blur(60px);
+  }
+  body::before{
+    width:min(70vw,640px);
+    height:min(70vw,640px);
+    top:-12%;
+    left:-8%;
+    background:rgba(109,79,216,0.16);
+    animation:drift 18s var(--ease) infinite alternate;
+  }
+  body::after{
+    width:min(55vw,520px);
+    height:min(55vw,520px);
+    right:-10%;
+    top:18%;
+    background:rgba(217,208,245,0.55);
+    animation:drift 22s var(--ease) infinite alternate-reverse;
+  }
+  #root{position:relative;z-index:1;}
   button,input,textarea,select{font-family:inherit;}
   @keyframes spin{to{transform:rotate(360deg)}}
-  @keyframes fadeUp{from{opacity:0;transform:translateY(6px)}to{opacity:1;transform:translateY(0)}}
+  @keyframes fadeUp{from{opacity:0;transform:translateY(14px)}to{opacity:1;transform:translateY(0)}}
+  @keyframes rise{from{opacity:0;transform:translateY(28px) scale(0.985)}to{opacity:1;transform:translateY(0) scale(1)}}
+  @keyframes drift{from{transform:translate(0,0)}to{transform:translate(24px,18px)}}
   @keyframes pulse{0%,100%{opacity:1}50%{opacity:0.35}}
-  a,button{transition:transform .1s ease, background .12s ease, border-color .12s ease, color .12s ease, opacity .12s ease;}
+  a,button{transition:transform .2s var(--ease), background .2s var(--ease), border-color .2s var(--ease), color .2s var(--ease), opacity .2s var(--ease), box-shadow .2s var(--ease);}
   button:not(:disabled):active{transform:translateY(1px);}
-  a:hover,button:hover{opacity:0.92}
-  textarea:focus,input:focus,select:focus{border-color:var(--accent)!important;outline:none;box-shadow:0 0 0 3px rgba(109,79,216,0.12);}
+  a:hover,button:hover{opacity:0.94}
+  button.primary:hover{opacity:1;transform:translateY(-1px);box-shadow:0 12px 28px rgba(109,79,216,0.22);}
+  textarea:focus,input:focus,select:focus{border-color:rgba(109,79,216,0.4)!important;outline:none;box-shadow:0 0 0 4px rgba(109,79,216,0.12);}
   button:disabled{opacity:0.5;cursor:not-allowed;}
-  ::placeholder{color:#9a93ad;}
+  ::placeholder{color:#9a92a8;}
   ::-webkit-scrollbar{width:6px;}
-  ::-webkit-scrollbar-thumb{background:rgba(109,79,216,0.22);border-radius:3px;}
+  ::-webkit-scrollbar-thumb{background:rgba(90,80,120,0.18);border-radius:3px;}
+  .lc-nav-pill{
+    background:rgba(255,255,255,0.55);
+    backdrop-filter:blur(18px) saturate(1.4);
+    -webkit-backdrop-filter:blur(18px) saturate(1.4);
+    border:1px solid rgba(255,255,255,0.65);
+    box-shadow:0 8px 32px rgba(42,36,56,0.06);
+  }
+  .lc-panel{
+    background:rgba(255,255,255,0.72);
+    backdrop-filter:blur(18px) saturate(1.2);
+    -webkit-backdrop-filter:blur(18px) saturate(1.2);
+    border:1px solid rgba(255,255,255,0.8);
+    box-shadow:0 20px 60px rgba(42,36,56,0.08);
+  }
+  .lc-display{font-family:'Kufam',system-ui,sans-serif;}
   @media (max-width: 767px){
     body{overflow-x:hidden;}
+  }
+  @media (prefers-reduced-motion: reduce){
+    *,*::before,*::after{animation-duration:0.01ms!important;transition-duration:0.01ms!important;}
   }
 </style>
 </head>
@@ -49,13 +98,13 @@
 <script>
 const {useState,useEffect,useCallback,useMemo}=React;
 
-const C={deep:"#1c1430",mid:"#5b3fc4",accent:"#6d4fd8",light:"#6d4fd8",pale:"#6d4fd8",surface:"#ffffff",card:"#ffffff",border:"rgba(92,70,168,0.14)",text:"#1c1430",muted:"#6b6480",white:"#ffffff",green:"#187a4c",greenBg:"#eef8f2",greenBorder:"rgba(24,122,76,0.22)",amber:"#8a6800",amberBg:"#fff8e6",amberBorder:"rgba(138,104,0,0.22)",soft:"#f7f5fb"};
+const C={deep:"#2a2438",mid:"#5b3fc4",accent:"#6d4fd8",light:"#6d4fd8",pale:"#6d4fd8",lilac:"#d9d0f5",surface:"#ffffff",card:"#ffffff",border:"rgba(42,36,56,0.10)",text:"#2a2438",muted:"#6a6178",white:"#ffffff",green:"#1f7a4d",greenBg:"rgba(238,247,241,0.9)",greenBorder:"rgba(31,122,77,0.18)",amber:"#8a6800",amberBg:"rgba(255,248,230,0.9)",amberBorder:"rgba(138,104,0,0.18)",soft:"rgba(255,255,255,0.55)"};
 const st={
-  card:{background:"#ffffff",border:`1px solid ${C.border}`,borderRadius:14,padding:28},
-  btn:{fontFamily:"inherit",cursor:"pointer",border:"none",borderRadius:10,fontWeight:600,transition:"opacity 0.12s, background 0.12s, border-color 0.12s"},
-  label:{fontSize:11,fontWeight:600,letterSpacing:"1.2px",textTransform:"uppercase",color:C.accent,marginBottom:10,display:"block"},
-  ta:{width:"100%",background:C.soft,border:`1px solid ${C.border}`,borderRadius:10,padding:14,fontFamily:"inherit",fontSize:14,color:C.text,lineHeight:1.7,resize:"vertical",boxSizing:"border-box"},
-  muted:{fontSize:13,color:C.muted}
+  card:{background:"rgba(255,255,255,0.72)",border:"1px solid rgba(255,255,255,0.8)",borderRadius:24,padding:28,boxShadow:"0 20px 60px rgba(42,36,56,0.08)"},
+  btn:{fontFamily:"inherit",cursor:"pointer",border:"none",borderRadius:999,fontWeight:600,transition:"transform 0.2s cubic-bezier(0.22,1,0.36,1), opacity 0.2s, background 0.2s, border-color 0.2s, box-shadow 0.2s"},
+  label:{fontSize:13,fontWeight:500,letterSpacing:"-0.01em",textTransform:"none",color:C.muted,marginBottom:8,display:"block"},
+  ta:{width:"100%",background:"rgba(255,255,255,0.7)",border:`1px solid ${C.border}`,borderRadius:18,padding:14,fontFamily:"inherit",fontSize:15,color:C.text,lineHeight:1.7,resize:"vertical",boxSizing:"border-box",letterSpacing:"-0.2px"},
+  muted:{fontSize:14,color:C.muted,lineHeight:1.65,letterSpacing:"-0.2px"}
 };
 
 async function apiFetch(path,opts={}){const r=await fetch(path,{headers:{"Content-Type":"application/json"},...opts});const data=await r.json().catch(()=> ({}));if(!r.ok){throw new Error(data.error||"Request failed");}return data;}
@@ -348,21 +397,23 @@ function Header({me,tab,setTab,onLogout,counts,isCompact}){
   const e=React.createElement;
   function tabBtn(id,label,badge){
     const active=tab===id;
-    return e("button",{onClick:()=>setTab(id),style:{...st.btn,padding:isCompact?"8px 10px":"8px 14px",fontSize:12,background:active?"rgba(109,79,216,0.10)":"transparent",border:`1px solid ${active?"rgba(109,79,216,0.28)":C.border}`,color:active?C.accent:C.muted,display:"inline-flex",alignItems:"center",gap:6,flex:isCompact?"1 1 calc(50% - 4px)":"0 0 auto",justifyContent:"center"}},
+    return e("button",{onClick:()=>setTab(id),style:{...st.btn,padding:isCompact?"8px 10px":"8px 14px",fontSize:12,background:active?C.lilac:"rgba(255,255,255,0.55)",border:`1px solid ${active?"rgba(109,79,216,0.28)":C.border}`,color:active?C.accent:C.muted,display:"inline-flex",alignItems:"center",gap:6,flex:isCompact?"1 1 calc(50% - 4px)":"0 0 auto",justifyContent:"center"}},
       label,
-      typeof badge==="number"&&badge>0&&e("span",{style:{fontSize:11,fontWeight:600,background:active?"rgba(109,79,216,0.14)":C.soft,borderRadius:999,padding:"1px 8px",color:active?C.accent:C.text}},badge)
+      typeof badge==="number"&&badge>0&&e("span",{style:{fontSize:11,fontWeight:600,background:active?"rgba(255,255,255,0.7)":C.soft,borderRadius:999,padding:"1px 8px",color:active?C.accent:C.text}},badge)
     );
   }
-  return e("div",{style:{display:"flex",alignItems:isCompact?"stretch":"center",justifyContent:"space-between",padding:isCompact?"20px 0 18px":"28px 0 24px",borderBottom:`1px solid ${C.border}`,marginBottom:isCompact?20:28,gap:14,flexDirection:isCompact?"column":"row"}},
-    e("div",null,
-      e("div",{style:{fontFamily:"inherit",fontSize:isCompact?20:24,fontWeight:600,color:C.text}},"Lingo",e("span",{style:{color:C.accent}},"Check")),
-      e("div",{style:{fontSize:12,color:C.muted,marginTop:2,wordBreak:"break-word"}},"Revisor Panel · ",e("span",{style:{color:C.accent}},me.displayName||me.email||me.username))
-    ),
-    e("div",{style:{display:"flex",alignItems:"center",gap:isCompact?8:8,flexWrap:"wrap",width:isCompact?"100%":"auto"}},
-      tabBtn("queue","Queue",counts.queue),
-      tabBtn("mine","My jobs",counts.mine),
-      tabBtn("finance","Finance"),
-      e("button",{onClick:onLogout,style:{...st.btn,background:"transparent",border:`1px solid ${C.border}`,color:C.muted,fontSize:12,padding:"8px 14px",flex:isCompact?"1 1 100%":"0 0 auto"}},isCompact?"Log out":"Logout")
+  return e("div",{style:{padding:isCompact?"14px 0 0":"20px 0 0",marginBottom:isCompact?18:24}},
+    e("div",{className:"lc-nav-pill",style:{borderRadius:isCompact?24:999,padding:isCompact?"12px":"10px 14px",display:"flex",alignItems:isCompact?"stretch":"center",justifyContent:"space-between",gap:12,flexDirection:isCompact?"column":"row"}},
+      e("div",{style:{paddingLeft:isCompact?4:6}},
+        e("div",{className:"lc-display",style:{fontSize:isCompact?20:22,fontWeight:600,color:C.text,letterSpacing:"-0.02em"}},"Lingo",e("span",{style:{color:C.accent}},"Check")),
+        e("div",{style:{fontSize:13,color:C.muted,marginTop:2,wordBreak:"break-word"}},"Reviewer · ",e("span",{style:{color:C.text}},me.displayName||me.email||me.username))
+      ),
+      e("div",{style:{display:"flex",alignItems:"center",gap:8,flexWrap:"wrap",width:isCompact?"100%":"auto"}},
+        tabBtn("queue","Queue",counts.queue),
+        tabBtn("mine","My jobs",counts.mine),
+        tabBtn("finance","Finance"),
+        e("button",{onClick:onLogout,style:{...st.btn,background:"rgba(255,255,255,0.7)",border:`1px solid ${C.border}`,color:C.muted,fontSize:12,padding:"8px 14px",flex:isCompact?"1 1 100%":"0 0 auto"}},"Log out")
+      )
     )
   );
 }
@@ -402,7 +453,7 @@ function QueueTab({me,allJobs,claimJob,setTab,setFocusJobId,isCompact,payoutRate
   if(queue.length===0 && langFilter==="all"){
     return e("div",{style:{textAlign:"center",padding:"80px 0"}},
       e("div",{style:{fontSize:40,marginBottom:18}},"✓"),
-      e("div",{style:{fontFamily:"inherit",fontSize:24,color:C.text,marginBottom:8}},"No jobs waiting"),
+      e("div",{className:"lc-display",style:{fontSize:24,color:C.text,marginBottom:8}},"No jobs waiting"),
       e("div",{style:st.muted},"New unclaimed requests will appear here automatically"),
       e("div",{style:{display:"flex",alignItems:"center",justifyContent:"center",gap:8,marginTop:18,fontSize:11,color:C.muted}},
         e("span",{style:{width:6,height:6,borderRadius:"50%",background:C.accent,display:"inline-block",animation:"pulse 1.5s ease-in-out infinite"}}),
@@ -414,7 +465,7 @@ function QueueTab({me,allJobs,claimJob,setTab,setFocusJobId,isCompact,payoutRate
   return e("div",null,
     e("div",{style:{display:"flex",alignItems:isCompact?"stretch":"center",justifyContent:"space-between",gap:10,marginBottom:12,flexWrap:"wrap"}},
       e("span",{style:{...st.label,marginBottom:0}},"Available jobs · claim to start working"),
-      e("select",{value:langFilter,onChange:ev=>setLangFilter(ev.target.value),style:{background:C.soft,border:`1px solid ${C.border}`,borderRadius:10,padding:"8px 12px",fontFamily:"inherit",fontSize:12,fontWeight:600,color:C.text,outline:"none",cursor:"pointer",minWidth:isCompact?"100%":140}},
+      e("select",{value:langFilter,onChange:ev=>setLangFilter(ev.target.value),style:{background:"rgba(255,255,255,0.7)",border:`1px solid ${C.border}`,borderRadius:14,padding:"8px 12px",fontFamily:"inherit",fontSize:12,fontWeight:600,color:C.text,outline:"none",cursor:"pointer",minWidth:isCompact?"100%":140}},
         e("option",{value:"all"},"All languages"),
         languages.map(lang=>e("option",{key:lang,value:lang},lang))
       )
@@ -430,14 +481,14 @@ function QueueTab({me,allJobs,claimJob,setTab,setFocusJobId,isCompact,payoutRate
             e("div",null,
               e("div",{style:{fontSize:13,fontWeight:600,color:C.text,marginBottom:6,display:"flex",alignItems:"center",gap:8,flexWrap:"wrap"}},
                 job.qaOnly?job.language:"EN → "+job.language,
-                job.qaOnly&&e("span",{style:{fontSize:10,fontWeight:600,letterSpacing:"0.6px",textTransform:"uppercase",color:C.accent,background:"rgba(109,79,216,0.08)",border:"1px solid rgba(109,79,216,0.18)",padding:"2px 8px",borderRadius:999}},"QA only"),
-                stale&&e("span",{style:{fontSize:10,fontWeight:600,letterSpacing:"0.6px",textTransform:"uppercase",color:C.amber,background:C.amberBg,border:`1px solid ${C.amberBorder}`,padding:"2px 8px",borderRadius:999}},"Stale — reclaim"),
+                job.qaOnly&&e("span",{style:{fontSize:11,fontWeight:500,color:C.muted,background:C.soft,border:`1px solid ${C.border}`,padding:"2px 8px",borderRadius:8}},"QA only"),
+                stale&&e("span",{style:{fontSize:11,fontWeight:500,color:C.amber,background:C.amberBg,border:`1px solid ${C.amberBorder}`,padding:"2px 8px",borderRadius:8}},"Stale — reclaim"),
                 typeof job.sourceWordCount==="number"&&e("span",{style:{fontSize:11,fontWeight:500,color:C.muted}}, job.sourceWordCount," words · ",fmtEur(payout))
               ),
               e("div",{style:{fontSize:12,color:C.muted,lineHeight:1.6,maxHeight:60,overflow:"hidden"}},(job.qaOnly?job.aiTranslation:job.originalText||"").substring(0,260),(job.qaOnly?job.aiTranslation:job.originalText||"").length>260?"…":""),
               e("div",{style:{fontSize:11,color:C.muted,marginTop:8}},formatWaiting(job.createdAt)," · submitted ",formatDateTime(job.createdAt))
             ),
-            e("button",{onClick:()=>onClaim(job.id),disabled:claimingId===job.id,style:{...st.btn,padding:"12px 18px",background:C.accent,color:C.white,fontSize:13,whiteSpace:"nowrap",width:isCompact?"100%":"auto"}},
+            e("button",{className:"primary",onClick:()=>onClaim(job.id),disabled:claimingId===job.id,style:{...st.btn,padding:"12px 18px",background:C.accent,color:C.white,fontSize:13,whiteSpace:"nowrap",width:isCompact?"100%":"auto"}},
               claimingId===job.id?e(React.Fragment,null,e(Spinner,{size:14})," Claiming…"):(stale?"Reclaim job":"Claim job")
             )
           );
@@ -563,19 +614,19 @@ function ReviewEditor({selectedJob,updateJob,unclaimJob,onDone,onReleased,isComp
     e("div",{style:{display:"flex",alignItems:"center",justifyContent:"space-between",margin:"0 0 10px",flexWrap:"wrap",gap:10}},
       e("div",{style:{fontSize:12,color:C.muted,flex:isCompact?"1 1 100%":"0 0 auto"}},"Mode:"),
       e("div",{style:{display:"flex",gap:8,flex:isCompact?"1 1 100%":"0 0 auto"}},
-        e("button",{onClick:()=>setMode("full"),style:{...st.btn,background:mode==="full"?"rgba(109,79,216,0.10)":"transparent",border:`1px solid ${mode==="full"?"rgba(109,79,216,0.28)":C.border}`,color:mode==="full"?C.accent:C.muted,fontSize:12,padding:"6px 10px",flex:isCompact?1:"0 0 auto"}},"Full text"),
-        e("button",{onClick:()=>setMode("sentences"),style:{...st.btn,background:mode==="sentences"?"rgba(109,79,216,0.10)":"transparent",border:`1px solid ${mode==="sentences"?"rgba(109,79,216,0.28)":C.border}`,color:mode==="sentences"?C.accent:C.muted,fontSize:12,padding:"6px 10px",flex:isCompact?1:"0 0 auto"}},"Sentence-by-sentence")
+        e("button",{onClick:()=>setMode("full"),style:{...st.btn,background:mode==="full"?C.lilac:"rgba(255,255,255,0.55)",border:`1px solid ${mode==="full"?"rgba(109,79,216,0.28)":C.border}`,color:mode==="full"?C.accent:C.muted,fontSize:12,padding:"6px 10px",flex:isCompact?1:"0 0 auto"}},"Full text"),
+        e("button",{onClick:()=>setMode("sentences"),style:{...st.btn,background:mode==="sentences"?C.lilac:"rgba(255,255,255,0.55)",border:`1px solid ${mode==="sentences"?"rgba(109,79,216,0.28)":C.border}`,color:mode==="sentences"?C.accent:C.muted,fontSize:12,padding:"6px 10px",flex:isCompact?1:"0 0 auto"}},"Sentence-by-sentence")
       )
     ),
     mode==="full"
       ?e("div",{style:{display:"grid",gridTemplateColumns:(isWide && !selectedJob.qaOnly)?"1fr 1fr":"1fr",gap:14,alignItems:"stretch",marginBottom:14}},
         !selectedJob.qaOnly&&e("div",{style:{...st.card,marginBottom:0,display:"flex",flexDirection:"column"}},
-          e("div",{style:{fontSize:11,letterSpacing:"1px",textTransform:"uppercase",color:C.muted,marginBottom:8}},"Original — English"),
+          e("div",{style:{fontSize:12,color:C.muted,marginBottom:8}},"Original — English"),
           e("div",{style:{fontSize:13,color:C.muted,lineHeight:1.75,whiteSpace:"pre-wrap",overflow:"auto",flex:1,maxHeight:paneHeight,paddingRight:6}},selectedJob.originalText)
         ),
-        e("div",{style:{...st.card,border:"1px solid rgba(109,79,216,0.28)",marginBottom:0,display:"flex",flexDirection:"column"}},
+        e("div",{style:{...st.card,border:`1px solid ${C.border}`,marginBottom:0,display:"flex",flexDirection:"column"}},
           e("div",{style:{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:10}},
-            e("div",{style:{fontSize:11,letterSpacing:"1px",textTransform:"uppercase",color:C.light}},"Editable translation — ",selectedJob.language),
+            e("div",{style:{fontSize:12,color:C.muted}},"Editable translation — ",selectedJob.language),
             e("div",{style:{fontSize:11,color:C.muted}},"Edit freely")
           ),
           e("textarea",{style:{...st.ta,flex:1,minHeight:paneHeight||220,height:paneHeight||"auto",resize:"vertical"},value:editedText,onChange:ev=>setEditedText(ev.target.value)})
@@ -583,8 +634,8 @@ function ReviewEditor({selectedJob,updateJob,unclaimJob,onDone,onReleased,isComp
       )
       :e("div",{style:{...st.card,padding:18,marginBottom:14}},
         e("div",{style:{display:"grid",gridTemplateColumns:isWide && !selectedJob.qaOnly?"1fr 1fr":"1fr",gap:12,alignItems:"start"}},
-          !selectedJob.qaOnly&&e("div",{style:{fontSize:11,letterSpacing:"1px",textTransform:"uppercase",color:C.muted,marginBottom:isWide?0:6}},"Original — English"),
-          e("div",{style:{fontSize:11,letterSpacing:"1px",textTransform:"uppercase",color:C.light,marginBottom:isWide?0:12}},"Editable — ",selectedJob.language)
+          !selectedJob.qaOnly&&e("div",{style:{fontSize:12,color:C.muted,marginBottom:isWide?0:6}},"Original — English"),
+          e("div",{style:{fontSize:12,color:C.muted,marginBottom:isWide?0:12}},"Editable — ",selectedJob.language)
         ),
         origSentences.map((origSentence, idx)=>{
           const val = editedSentences[idx] ?? "";
@@ -663,7 +714,7 @@ function MyAssignmentsTab({me,allJobs,updateJob,unclaimJob,focusJobId,setFocusJo
   if(mine.length===0){
     return e("div",{style:{textAlign:"center",padding:"80px 0"}},
       e("div",{style:{fontSize:40,marginBottom:18}},"📋"),
-      e("div",{style:{fontFamily:"inherit",fontSize:24,color:C.text,marginBottom:8}},"No assignments yet"),
+      e("div",{className:"lc-display",style:{fontSize:24,color:C.text,marginBottom:8}},"No assignments yet"),
       e("div",{style:st.muted},"Claim a job from the Queue to get started.")
     );
   }
@@ -676,9 +727,9 @@ function MyAssignmentsTab({me,allJobs,updateJob,unclaimJob,focusJobId,setFocusJo
       e("div",{style:{display:"flex",alignItems:"center",justifyContent:"space-between",gap:8,marginBottom:6}},
         e("div",{style:{fontSize:13,fontWeight:600,color:C.text,display:"flex",alignItems:"center",gap:8,flexWrap:"wrap"}},
           job.qaOnly?job.language:"EN → "+job.language,
-          job.qaOnly&&e("span",{style:{fontSize:10,fontWeight:600,letterSpacing:"0.6px",textTransform:"uppercase",color:C.accent,background:"rgba(109,79,216,0.08)",border:"1px solid rgba(109,79,216,0.18)",padding:"2px 8px",borderRadius:999}},"QA only")
+          job.qaOnly&&e("span",{style:{fontSize:11,fontWeight:500,color:C.muted,background:C.soft,border:`1px solid ${C.border}`,padding:"2px 8px",borderRadius:8}},"QA only")
         ),
-        e("span",{style:{fontSize:10,fontWeight:600,letterSpacing:"0.6px",textTransform:"uppercase",padding:"3px 8px",borderRadius:999,background:isComplete?C.greenBg:C.amberBg,border:`1px solid ${isComplete?C.greenBorder:C.amberBorder}`,color:isComplete?C.green:C.amber}},isComplete?"Completed":"In progress")
+        e("span",{style:{fontSize:11,fontWeight:500,padding:"3px 8px",borderRadius:8,background:isComplete?C.greenBg:C.amberBg,border:`1px solid ${isComplete?C.greenBorder:C.amberBorder}`,color:isComplete?C.green:C.amber}},isComplete?"Completed":"In progress")
       ),
       e("div",{style:{fontSize:12,color:C.muted,marginBottom:6,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}},(job.qaOnly?job.aiTranslation:job.originalText||"").substring(0,60),"…"),
       e("div",{style:{fontSize:11,color:C.muted}},
@@ -690,7 +741,7 @@ function MyAssignmentsTab({me,allJobs,updateJob,unclaimJob,focusJobId,setFocusJo
 
   function filterBtn(id,label){
     const active=listFilter===id;
-    return e("button",{onClick:()=>setListFilter(id),style:{...st.btn,padding:"6px 10px",fontSize:11,background:active?"rgba(109,79,216,0.10)":"transparent",border:`1px solid ${active?"rgba(109,79,216,0.28)":C.border}`,color:active?C.accent:C.muted}},label);
+    return e("button",{onClick:()=>setListFilter(id),style:{...st.btn,padding:"6px 10px",fontSize:11,background:active?C.lilac:"rgba(255,255,255,0.55)",border:`1px solid ${active?"rgba(109,79,216,0.28)":C.border}`,color:active?C.accent:C.muted}},label);
   }
 
   return e("div",{style:{display:"grid",gridTemplateColumns:(selectedJob&&!showList)?"1fr":(selectedJob&&isWide?"260px 1fr":"1fr"),gap:16,alignItems:"start"}},
@@ -718,21 +769,21 @@ function MyAssignmentsTab({me,allJobs,updateJob,unclaimJob,focusJobId,setFocusJo
             ? e("div",{style:{...st.card,padding:isCompact?18:28}},
                 e("div",{style:{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:14,flexWrap:"wrap",gap:8}},
                   e("div",{style:{fontFamily:"inherit",fontSize:isCompact?18:22,color:C.text}},"Completed assignment"),
-                  e("span",{style:{fontSize:11,fontWeight:600,padding:"4px 10px",borderRadius:999,background:C.greenBg,border:`1px solid ${C.greenBorder}`,color:C.green}},"DELIVERED")
+                  e("span",{style:{fontSize:11,fontWeight:500,padding:"4px 10px",borderRadius:8,background:C.greenBg,border:`1px solid ${C.greenBorder}`,color:C.green}},"Delivered")
                 ),
                 e("div",{style:{display:"grid",gridTemplateColumns:isCompact?"1fr":"1fr 1fr",gap:12,marginBottom:18}},
-                  e("div",null,e("div",{style:{fontSize:11,color:C.muted,letterSpacing:"1px",textTransform:"uppercase"}},"Language"),e("div",{style:{fontSize:14,color:C.text,marginTop:4}}, selectedJob.qaOnly?selectedJob.language:"EN → "+selectedJob.language)),
-                  e("div",null,e("div",{style:{fontSize:11,color:C.muted,letterSpacing:"1px",textTransform:"uppercase"}},"Words / payout"),e("div",{style:{fontSize:14,color:C.text,marginTop:4}}, (selectedJob.sourceWordCount||0)," · ",fmtEur(jobPayoutCents(selectedJob,payoutRate)))),
-                  e("div",null,e("div",{style:{fontSize:11,color:C.muted,letterSpacing:"1px",textTransform:"uppercase"}},"Claimed"),e("div",{style:{fontSize:14,color:C.text,marginTop:4}}, formatDateTime(selectedJob.claimedAt))),
-                  e("div",null,e("div",{style:{fontSize:11,color:C.muted,letterSpacing:"1px",textTransform:"uppercase"}},"Completed"),e("div",{style:{fontSize:14,color:C.text,marginTop:4}}, formatDateTime(selectedJob.completedAt)))
+                  e("div",null,e("div",{style:{fontSize:12,color:C.muted}},"Language"),e("div",{style:{fontSize:14,color:C.text,marginTop:4}}, selectedJob.qaOnly?selectedJob.language:"EN → "+selectedJob.language)),
+                  e("div",null,e("div",{style:{fontSize:12,color:C.muted}},"Words / payout"),e("div",{style:{fontSize:14,color:C.text,marginTop:4}}, (selectedJob.sourceWordCount||0)," · ",fmtEur(jobPayoutCents(selectedJob,payoutRate)))),
+                  e("div",null,e("div",{style:{fontSize:12,color:C.muted}},"Claimed"),e("div",{style:{fontSize:14,color:C.text,marginTop:4}}, formatDateTime(selectedJob.claimedAt))),
+                  e("div",null,e("div",{style:{fontSize:12,color:C.muted}},"Completed"),e("div",{style:{fontSize:14,color:C.text,marginTop:4}}, formatDateTime(selectedJob.completedAt)))
                 ),
                 e("div",{style:{display:"grid",gridTemplateColumns:(selectedJob.qaOnly||!isWide)?"1fr":"1fr 1fr",gap:14}},
                   !selectedJob.qaOnly&&e("div",null,
-                    e("div",{style:{fontSize:11,color:C.muted,letterSpacing:"1px",textTransform:"uppercase",marginBottom:8}},"Original"),
+                    e("div",{style:{fontSize:12,color:C.muted,marginBottom:8}},"Original"),
                     e("div",{style:{fontSize:13,color:C.muted,lineHeight:1.75,whiteSpace:"pre-wrap",maxHeight:300,overflow:"auto",padding:12,border:`1px solid ${C.border}`,borderRadius:10,background:C.soft}},selectedJob.originalText)
                   ),
                   e("div",null,
-                    e("div",{style:{fontSize:11,color:C.light,letterSpacing:"1px",textTransform:"uppercase",marginBottom:8}},selectedJob.qaOnly?"Proofread translation":"Final translation"),
+                    e("div",{style:{fontSize:12,color:C.muted,marginBottom:8}},selectedJob.qaOnly?"Proofread translation":"Final translation"),
                     e("div",{style:{fontSize:13,color:C.text,lineHeight:1.75,whiteSpace:"pre-wrap",maxHeight:300,overflow:"auto",padding:12,border:`1px solid ${C.border}`,borderRadius:10,background:C.soft}}, selectedJob.revisedTranslation||"")
                   )
                 )
@@ -783,7 +834,7 @@ function FinanceTab({me,allJobs,isCompact,payoutRate}){
 
   function statCard(label,value,sub){
     return e("div",{style:{...st.card,padding:20}},
-      e("div",{style:{fontSize:11,color:C.muted,letterSpacing:"1.2px",textTransform:"uppercase",marginBottom:8}},label),
+      e("div",{style:{fontSize:12,color:C.muted,marginBottom:8}},label),
       e("div",{style:{fontSize:28,fontFamily:"inherit",color:C.text}},value),
       sub&&e("div",{style:{fontSize:12,color:C.muted,marginTop:4}},sub)
     );
@@ -831,11 +882,13 @@ function RevisorView({me,allJobs,tab,setTab,updateJob,claimJob,unclaimJob,focusJ
     mine: allJobs.filter(j=>(j.claimedByRevisorId===me.revisorId || j.completedByRevisorId===me.revisorId) && j.status!=="complete").length
   };
 
-  return e("div",{style:{maxWidth:1280,margin:"0 auto",padding:isCompact?"0 16px":"0 20px"}},
+  return e("div",{style:{maxWidth:1280,margin:"0 auto",padding:isCompact?"0 16px 40px":"0 24px 48px"}},
     e(Header,{me,tab,setTab,onLogout,counts,isCompact}),
-    tab==="queue" && e(QueueTab,{me,allJobs,claimJob,setTab,setFocusJobId,isCompact,payoutRate}),
-    tab==="mine" && e(MyAssignmentsTab,{me,allJobs,updateJob,unclaimJob,focusJobId,setFocusJobId,isCompact,payoutRate}),
-    tab==="finance" && e(FinanceTab,{me,allJobs,isCompact,payoutRate})
+    e("div",{style:{animation:"rise 0.45s var(--ease)"}},
+      tab==="queue" && e(QueueTab,{me,allJobs,claimJob,setTab,setFocusJobId,isCompact,payoutRate}),
+      tab==="mine" && e(MyAssignmentsTab,{me,allJobs,updateJob,unclaimJob,focusJobId,setFocusJobId,isCompact,payoutRate}),
+      tab==="finance" && e(FinanceTab,{me,allJobs,isCompact,payoutRate})
+    )
   );
 }
 

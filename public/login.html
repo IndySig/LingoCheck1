@@ -4,67 +4,113 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>LingoCheck — Revisor Login</title>
-<link href="https://fonts.googleapis.com/css2?family=Kufam:ital,wght@0,400;0,500;0,600;0,700;1,400&display=swap" rel="stylesheet">
+<link href="https://fonts.googleapis.com/css2?family=Kufam:ital,wght@0,400;0,500;0,600;0,700;1,400&family=Manrope:wght@400;500;600;700&display=swap" rel="stylesheet">
 <style>
   :root{
-    --bg:#ffffff;
-    --ink:#1c1430;
-    --muted:#6b6480;
+    --bg:#efe8dc;
+    --ink:#2a2438;
+    --muted:#6a6178;
     --accent:#6d4fd8;
-    --border:rgba(92,70,168,0.14);
+    --lilac:#d9d0f5;
+    --border:rgba(42,36,56,0.10);
+    --soft:rgba(255,255,255,0.55);
+    --ease:cubic-bezier(0.22, 1, 0.36, 1);
   }
   *{margin:0;padding:0;box-sizing:border-box;}
   body{
-    background:
-      radial-gradient(720px 280px at 10% -12%, rgba(109,79,216,0.07), transparent 58%),
-      #ffffff;
+    background:var(--bg);
     color:var(--ink);
-    font-family:'Kufam',system-ui,sans-serif;
+    font-family:'Manrope',system-ui,sans-serif;
     font-weight:400;
     min-height:100vh;
     -webkit-font-smoothing:antialiased;
+    text-rendering:optimizeLegibility;
+    overflow-x:hidden;
   }
+  body::before,body::after{
+    content:"";
+    position:fixed;
+    pointer-events:none;
+    z-index:0;
+    border-radius:50%;
+    filter:blur(60px);
+  }
+  body::before{
+    width:min(70vw,640px);
+    height:min(70vw,640px);
+    top:-12%;
+    left:-8%;
+    background:rgba(109,79,216,0.16);
+    animation:drift 18s var(--ease) infinite alternate;
+  }
+  body::after{
+    width:min(55vw,520px);
+    height:min(55vw,520px);
+    right:-10%;
+    top:18%;
+    background:rgba(217,208,245,0.55);
+    animation:drift 22s var(--ease) infinite alternate-reverse;
+  }
+  #app{position:relative;z-index:1;}
   button,input,textarea,select{font-family:inherit;}
-  @keyframes fadeUp{from{opacity:0;transform:translateY(6px)}to{opacity:1;transform:translateY(0)}}
-  input:focus{border-color:var(--accent)!important;outline:none;box-shadow:0 0 0 3px rgba(109,79,216,0.12);}
-  a,button{transition:transform .1s ease, background .12s ease, border-color .12s ease, color .12s ease, opacity .12s ease;}
+  @keyframes fadeUp{from{opacity:0;transform:translateY(14px)}to{opacity:1;transform:translateY(0)}}
+  @keyframes rise{from{opacity:0;transform:translateY(28px) scale(0.985)}to{opacity:1;transform:translateY(0) scale(1)}}
+  @keyframes drift{from{transform:translate(0,0)}to{transform:translate(24px,18px)}}
+  input:focus{border-color:rgba(109,79,216,0.4)!important;outline:none;box-shadow:0 0 0 4px rgba(109,79,216,0.12);}
+  a,button{transition:transform .2s var(--ease), background .2s var(--ease), border-color .2s var(--ease), color .2s var(--ease), opacity .2s var(--ease), box-shadow .2s var(--ease);}
   button:not(:disabled):active{transform:translateY(1px);}
-  a:hover,button:hover{opacity:0.92}
+  a:hover,button:hover{opacity:0.94}
+  button.primary:hover{opacity:1;transform:translateY(-1px);box-shadow:0 12px 28px rgba(109,79,216,0.22);}
   button:disabled{opacity:0.5;cursor:not-allowed;}
-  ::placeholder{color:#9a93ad;}
+  ::placeholder{color:#9a92a8;}
   ::-webkit-scrollbar{width:6px;}
-  ::-webkit-scrollbar-thumb{background:rgba(109,79,216,0.22);border-radius:3px;}
-  .pw-list{list-style:none;margin:10px 0 0;padding:12px 14px;background:#f7f5fb;border:1px solid var(--border);border-radius:10px;}
-  .pw-list li{display:flex;align-items:center;gap:8px;font-size:12px;color:var(--muted);line-height:1.6;}
+  ::-webkit-scrollbar-thumb{background:rgba(90,80,120,0.18);border-radius:3px;}
+  .pw-list{list-style:none;margin:10px 0 0;padding:12px 14px;background:rgba(255,255,255,0.55);border:1px solid var(--border);border-radius:16px;}
+  .pw-list li{display:flex;align-items:center;gap:8px;font-size:13px;color:var(--muted);line-height:1.6;}
   .pw-list li + li{margin-top:2px;}
-  .pw-list li.ok{color:#187a4c;}
+  .pw-list li.ok{color:#1f7a4d;}
   .pw-dot{width:14px;height:14px;border-radius:50%;border:1.5px solid currentColor;display:inline-flex;align-items:center;justify-content:center;font-size:9px;flex-shrink:0;}
   .otp{letter-spacing:0.35em;text-align:center;font-size:22px;font-weight:600;}
-  .code-box{text-align:center;background:#f7f5fb;border:1px solid var(--border);border-radius:12px;padding:18px 16px;margin:0 0 18px;}
-  .code-box .digits{font-size:28px;font-weight:600;letter-spacing:0.28em;color:var(--ink);margin-top:6px;}
+  .code-box{text-align:center;background:rgba(255,255,255,0.55);border:1px solid var(--border);border-radius:18px;padding:18px 16px;margin:0 0 18px;}
+  .code-box .digits{font-size:28px;font-weight:600;letter-spacing:0.28em;color:var(--ink);margin-top:6px;font-family:'Kufam',system-ui,sans-serif;}
+  .lc-nav-pill{
+    background:rgba(255,255,255,0.55);
+    backdrop-filter:blur(18px) saturate(1.4);
+    -webkit-backdrop-filter:blur(18px) saturate(1.4);
+    border:1px solid rgba(255,255,255,0.65);
+    box-shadow:0 8px 32px rgba(42,36,56,0.06);
+  }
+  .lc-panel{
+    background:rgba(255,255,255,0.72);
+    backdrop-filter:blur(18px) saturate(1.2);
+    -webkit-backdrop-filter:blur(18px) saturate(1.2);
+    border:1px solid rgba(255,255,255,0.8);
+    box-shadow:0 20px 60px rgba(42,36,56,0.08);
+  }
+  .lc-display{font-family:'Kufam',system-ui,sans-serif;}
   @media (max-width: 767px){
     body{overflow-x:hidden;}
     .login-shell{padding:0 16px!important;}
-    .login-head{flex-wrap:wrap;gap:12px;padding:20px 0 18px!important;margin-bottom:24px!important;}
-    .login-head > div{font-size:20px!important;}
-    .login-head a{font-size:11px;padding:6px 10px;}
-    .login-card{padding:18px!important;}
+    .login-card{padding:22px!important;}
     .code-box{padding:14px 12px!important;}
     .code-box .digits{font-size:22px;letter-spacing:0.14em;}
     .otp{font-size:18px;letter-spacing:0.22em;}
+  }
+  @media (prefers-reduced-motion: reduce){
+    *,*::before,*::after{animation-duration:0.01ms!important;transition-duration:0.01ms!important;}
   }
 </style>
 </head>
 <body>
 <div id="app"></div>
 <script>
-const C={deep:"#1c1430",mid:"#5b3fc4",accent:"#6d4fd8",light:"#6d4fd8",pale:"#6d4fd8",surface:"#ffffff",card:"#ffffff",border:"rgba(92,70,168,0.14)",text:"#1c1430",muted:"#6b6480",white:"#ffffff",green:"#187a4c",greenBg:"#eef8f2",greenBorder:"rgba(24,122,76,0.22)",soft:"#f7f5fb"};
+const C={deep:"#2a2438",mid:"#5b3fc4",accent:"#6d4fd8",light:"#6d4fd8",pale:"#6d4fd8",lilac:"#d9d0f5",surface:"#ffffff",card:"#ffffff",border:"rgba(42,36,56,0.10)",text:"#2a2438",muted:"#6a6178",white:"#ffffff",green:"#1f7a4d",greenBg:"rgba(238,247,241,0.9)",greenBorder:"rgba(31,122,77,0.18)",soft:"rgba(255,255,255,0.55)"};
 const st={
-  card:{background:"#ffffff",border:`1px solid ${C.border}`,borderRadius:14,padding:28},
-  btn:{fontFamily:"inherit",cursor:"pointer",border:"none",borderRadius:10,fontWeight:600,transition:"opacity 0.12s, background 0.12s, border-color 0.12s"},
-  label:{fontSize:11,fontWeight:600,letterSpacing:"1.2px",textTransform:"uppercase",color:C.accent,marginBottom:10,display:"block"},
-  inp:{width:"100%",background:C.soft,border:`1px solid ${C.border}`,borderRadius:10,padding:"12px 14px",fontFamily:"inherit",fontSize:14,color:C.text,lineHeight:1.4,boxSizing:"border-box"},
-  muted:{fontSize:13,color:C.muted}
+  card:{background:"rgba(255,255,255,0.72)",border:"1px solid rgba(255,255,255,0.8)",borderRadius:28,padding:28,boxShadow:"0 20px 60px rgba(42,36,56,0.08)"},
+  btn:{fontFamily:"inherit",cursor:"pointer",border:"none",borderRadius:999,fontWeight:600,transition:"transform 0.2s cubic-bezier(0.22,1,0.36,1), opacity 0.2s, background 0.2s, border-color 0.2s, box-shadow 0.2s"},
+  label:{fontSize:13,fontWeight:500,letterSpacing:"-0.01em",textTransform:"none",color:C.muted,marginBottom:8,display:"block"},
+  inp:{width:"100%",background:"rgba(255,255,255,0.7)",border:`1px solid ${C.border}`,borderRadius:18,padding:"12px 16px",fontFamily:"inherit",fontSize:15,color:C.text,lineHeight:1.4,boxSizing:"border-box",letterSpacing:"-0.2px"},
+  muted:{fontSize:15,color:C.muted,lineHeight:1.7,letterSpacing:"-0.2px"}
 };
 
 function styleStr(obj){return Object.entries(obj).map(([k,v])=>`${k.replace(/[A-Z]/g,m=>"-"+m.toLowerCase())}:${v}`).join(';');}
@@ -107,12 +153,12 @@ let otpInfo = null;
 
 function shell(inner){
   return `
-    <div class="login-shell" style="max-width:520px;margin:0 auto;padding:0 20px;">
-      <div class="login-head" style="display:flex;align-items:center;justify-content:space-between;padding:28px 0 24px;border-bottom:1px solid ${C.border};margin-bottom:36px;gap:12px;">
-        <div style="font-family:inherit;font-size:24px;font-weight:600;color:${C.text}">Lingo<span style="color:${C.accent}">Check</span></div>
-        <a href="/" style="text-decoration:none;font-size:12px;color:${C.muted};border:1px solid ${C.border};padding:6px 14px;border-radius:10px;background:${C.soft};white-space:nowrap;">← Client Portal</a>
+    <div class="login-shell" style="max-width:520px;margin:0 auto;padding:20px 20px 48px;">
+      <div class="lc-nav-pill" style="display:flex;align-items:center;justify-content:space-between;padding:10px 14px;border-radius:999px;margin-bottom:28px;gap:12px;">
+        <div class="lc-display" style="font-size:20px;font-weight:600;color:${C.text};letter-spacing:-0.02em;padding-left:6px">Lingo<span style="color:${C.accent}">Check</span></div>
+        <a href="/" style="text-decoration:none;font-size:13px;font-weight:600;color:${C.muted};border:1px solid ${C.border};padding:8px 14px;border-radius:999px;background:rgba(255,255,255,0.7);white-space:nowrap;">← Back to portal</a>
       </div>
-      <div class="login-card" style="animation:fadeUp .25s ease;${styleStr(st.card)}">${inner}</div>
+      <div class="login-card lc-panel" style="animation:rise .55s cubic-bezier(0.22,1,0.36,1);border-radius:28px;padding:28px;${styleStr(st.card)}">${inner}</div>
     </div>
   `;
 }
@@ -147,18 +193,18 @@ function render(){
   if(mode==="2fa-verify"){
     const delivered = !!otpInfo?.delivered;
     root.innerHTML = shell(`
-      <div style="font-family:inherit;font-size:30px;font-weight:400;color:${C.text};margin-bottom:8px">Check your email</div>
-      <div style="${styleStr(st.muted)};line-height:1.7;margin-bottom:18px">We sent a 6-digit sign-in code to <strong style="color:${C.text}">${otpInfo?.emailMasked || "your email"}</strong>. Enter it below. It expires in 10 minutes.</div>
+      <div class="lc-display" style="font-size:28px;font-weight:400;color:${C.text};margin-bottom:8px;letter-spacing:-0.02em">Check your email</div>
+      <div style="${styleStr(st.muted)};margin-bottom:18px">We sent a 6-digit code to <strong style="color:${C.text}">${otpInfo?.emailMasked || "your email"}</strong>. Enter it below — it expires in 10 minutes.</div>
       ${delivered?"":`
         <div class="code-box">
-          <div style="font-size:11px;font-weight:600;letter-spacing:1.2px;text-transform:uppercase;color:${C.accent}">Email isn’t configured yet — use this code</div>
+          <div style="font-size:12px;font-weight:500;color:${C.muted}">Email isn’t set up yet — use this code</div>
           <div class="digits" id="shownCode">${otpInfo?.code || "••••••"}</div>
         </div>
       `}
       <label style="${styleStr(st.label)}" for="code">Email code</label>
       <input id="code" class="otp" inputmode="numeric" autocomplete="one-time-code" maxlength="6" placeholder="000000" style="${styleStr(st.inp)}" />
       <div id="err" style="display:none;margin-top:14px;font-size:12px;color:#c43d3d"></div>
-      <button id="btn" style="margin-top:18px;${styleStr(st.btn)};width:100%;padding:14px;background:${C.accent};font-size:15px;color:${C.white}">Verify</button>
+      <button id="btn" class="primary" style="margin-top:18px;${styleStr(st.btn)};width:100%;padding:15px;background:${C.accent};font-size:15px;color:${C.white}">Verify</button>
       <button id="resend" style="margin-top:10px;${styleStr(st.btn)};width:100%;padding:10px;background:transparent;border:1px solid ${C.border};color:${C.muted};font-size:13px">Send a new code</button>
       <button id="back" style="margin-top:8px;${styleStr(st.btn)};width:100%;padding:10px;background:transparent;border:none;color:${C.muted};font-size:13px">← Back to login</button>
     `);
@@ -170,15 +216,15 @@ function render(){
   const isLogin = mode === "login";
   root.innerHTML = shell(`
         <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px">
-          <div style="font-family:inherit;font-size:30px;font-weight:400;color:${C.text}">${isLogin?"Revisor login":"Create revisor account"}</div>
+          <div class="lc-display" style="font-size:28px;font-weight:400;color:${C.text};letter-spacing:-0.02em;line-height:1.15">${isLogin?"Welcome back":"Join as a revisor"}</div>
         </div>
-        <div style="${styleStr(st.muted)};line-height:1.7;margin-bottom:18px">
-          ${isLogin?"Log in to access your queue, assignments and finance.":"Sign up to start claiming and reviewing translations."}
+        <div style="${styleStr(st.muted)};margin-bottom:22px">
+          ${isLogin?"Sign in to pick up jobs and finish careful reviews.":"Create an account to claim translations and get paid for your work."}
         </div>
 
         <div style="display:flex;gap:8px;margin-bottom:18px">
-          <button id="tabLogin" style="${styleStr(st.btn)};flex:1;padding:10px;font-size:13px;background:${isLogin?"rgba(109,79,216,0.10)":"transparent"};border:1px solid ${isLogin?"rgba(109,79,216,0.28)":C.border};color:${isLogin?C.accent:C.muted}">Log in</button>
-          <button id="tabSignup" style="${styleStr(st.btn)};flex:1;padding:10px;font-size:13px;background:${!isLogin?"rgba(109,79,216,0.10)":"transparent"};border:1px solid ${!isLogin?"rgba(109,79,216,0.28)":C.border};color:${!isLogin?C.accent:C.muted}">Sign up</button>
+          <button id="tabLogin" style="${styleStr(st.btn)};flex:1;padding:10px;font-size:13px;background:${isLogin?C.lilac:"transparent"};border:1px solid ${isLogin?"rgba(109,79,216,0.28)":C.border};color:${isLogin?C.accent:C.muted}">Log in</button>
+          <button id="tabSignup" style="${styleStr(st.btn)};flex:1;padding:10px;font-size:13px;background:${!isLogin?C.lilac:"transparent"};border:1px solid ${!isLogin?"rgba(109,79,216,0.28)":C.border};color:${!isLogin?C.accent:C.muted}">Sign up</button>
         </div>
 
         ${!isLogin ? `
@@ -196,12 +242,12 @@ function render(){
         ${renderPasswordChecklist("")}
 
         <div id="err" style="display:none;margin-top:14px;font-size:12px;color:#c43d3d"></div>
-        <button id="btn" ${isLogin?"":"disabled"} style="margin-top:18px;${styleStr(st.btn)};width:100%;padding:14px;background:${C.accent};font-size:15px;color:${C.white}">
+        <button id="btn" class="primary" ${isLogin?"":"disabled"} style="margin-top:18px;${styleStr(st.btn)};width:100%;padding:15px;background:${C.accent};font-size:15px;color:${C.white}">
           ${isLogin?"Log in":"Create account"}
         </button>
 
-        <div style="margin-top:16px;font-size:11px;color:${C.muted};line-height:1.6">
-          ${isLogin?"We’ll email you a 6-digit code to confirm it’s you.":"We’ll email you a 6-digit code next. Earnings: revisors are paid <strong style=\"color:"+C.accent+"\">€0.025</strong> per source word."}
+        <div style="margin-top:16px;font-size:13px;color:${C.muted};line-height:1.65">
+          ${isLogin?"We’ll email a short code to confirm it’s really you.":"Next we’ll email a short code. Revisors earn <strong style=\"color:"+C.text+"\">€0.025</strong> per source word."}
         </div>
   `);
 
