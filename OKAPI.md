@@ -24,7 +24,12 @@ npm run build   # downloads JRE + Okapi into .tools/
 npm start
 ```
 
-On Render, set **Build Command** to `npm run build` and **Start Command** to `npm start` (see `render.yaml`). Also set `ANTHROPIC_API_KEY` (and other secrets) in the Render dashboard — `auth.local.json` is not deployed.
+On Render, set:
+
+- **Build Command:** `npm install && npm run build`
+- **Start Command:** `npm start`
+
+(see `render.yaml`). `npm start` also auto-installs Okapi if the build step was skipped. Set `ANTHROPIC_API_KEY` (and other secrets) in the Render dashboard — `auth.local.json` is not deployed. First boot may take a few minutes while Java/Okapi download.
 
 You should see in logs: `Okapi Tikal ready (...)`.
 

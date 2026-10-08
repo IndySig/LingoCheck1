@@ -37,7 +37,17 @@ if [[ ! -f "$OKAPI_HOME/tikal.sh" && ! -d "$OKAPI_HOME/lib" ]]; then
     "https://okapiframework.org/binaries/main/${OKAPI_VERSION}/okapi-apps_gtk2-linux-x86_64_${OKAPI_VERSION}.zip"
   rm -rf "$TOOLS/okapi-extract"
   mkdir -p "$TOOLS/okapi-extract"
-  unzip -q "$OK_ZIP" -d "$TOOLS/okapi-extract"
+  if command -v unzip >/dev/null 2>&1; then
+    unzip -q "$OK_ZIP" -d "$TOOLS/okapi-extract"
+  elif command -v python3 >/dev/null 2>&1; then
+    python3 - "$OK_ZIP" "$TOOLS/okapi-extract" <<'PY'
+import sys, zipfile
+zipfile.ZipFile(sys.argv[1]).extractall(sys.argv[2])
+PY
+  else
+    echo "Need unzip or python3 to extract Okapi" >&2
+    exit 1
+  fi
   if [[ -f "$TOOLS/okapi-extract/tikal.sh" ]]; then
     SOURCE="$TOOLS/okapi-extract"
   else

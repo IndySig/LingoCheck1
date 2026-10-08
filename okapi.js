@@ -122,8 +122,8 @@ function getStatus() {
     message: ready
       ? 'Okapi Tikal ready'
       : !javaOk
-        ? 'Java 11+ not found. Run scripts/setup-okapi.ps1'
-        : 'Okapi apps not found. Run scripts/setup-okapi.ps1'
+        ? 'Java 11+ not found. Run: npm run setup:okapi'
+        : 'Okapi apps not found. Run: npm run setup:okapi'
   };
 }
 
