@@ -284,10 +284,11 @@ function publicJob(job) {
   const sourceFile = job.sourceFile && typeof job.sourceFile === 'object'
     ? {
         name: sanitizeFilename(job.sourceFile.name),
-        ext: String(job.sourceFile.ext || '').toLowerCase().slice(0, 8)
+        ext: String(job.sourceFile.ext || '').toLowerCase().slice(0, 8),
+        hasOkapi: !!(job.sourceFile.okapi && job.sourceFile.okapi.xliffB64)
       }
     : null;
-  return {
+  const out = {
     id: job.id,
     clientId: job.clientId,
     originalText: job.originalText,
@@ -304,6 +305,13 @@ function publicJob(job) {
     sourceFile,
     clientEmailMasked: job.clientEmail ? maskEmail(job.clientEmail) : null
   };
+  // Needed for Okapi merge after human review (sentence count must match XLIFF).
+  if (job.status === 'complete') {
+    out.sourceSentences = Array.isArray(job.sourceSentences) ? job.sourceSentences : null;
+    out.translationSentences = Array.isArray(job.translationSentences) ? job.translationSentences : null;
+    out.sentenceParaMap = Array.isArray(job.sentenceParaMap) ? job.sentenceParaMap : null;
+  }
+  return out;
 }
 
 function revisorJob(job) {
@@ -453,17 +461,41 @@ function scanSourceFileBase64(ext, b64) {
   return buf.toString('base64');
 }
 
+function sanitizeOkapiPackage(raw) {
+  if (!raw || typeof raw !== 'object') return null;
+  const xliffB64 = typeof raw.xliffB64 === 'string' ? raw.xliffB64 : '';
+  if (!xliffB64 || xliffB64.length > MAX_FILE_BYTES * 2) return null;
+  const skeletonsIn = Array.isArray(raw.skeletons) ? raw.skeletons.slice(0, 20) : [];
+  const skeletons = [];
+  for (const sk of skeletonsIn) {
+    if (!sk || typeof sk !== 'object') continue;
+    const name = sanitizeFilename(sk.name || 'skeleton.skl').slice(0, 180);
+    const b64 = typeof sk.b64 === 'string' ? sk.b64 : '';
+    if (!name || !b64 || b64.length > MAX_FILE_BYTES * 2) continue;
+    if (!/\.skl(?:\.zip)?$/i.test(name)) continue;
+    skeletons.push({ name, b64 });
+  }
+  const sourceLang = String(raw.sourceLang || 'en').toLowerCase().replace(/[^a-z\-]/g, '').slice(0, 12) || 'en';
+  const targetLang = String(raw.targetLang || 'nl').toLowerCase().replace(/[^a-z\-]/g, '').slice(0, 12) || 'nl';
+  const fileName = sanitizeFilename(raw.fileName || 'document.docx');
+  const sentenceCount = Math.max(0, Math.min(2000, Number(raw.sentenceCount) | 0));
+  return { xliffB64, skeletons, sourceLang, targetLang, fileName, sentenceCount };
+}
+
 function sourceFileForDownload(job) {
   if (!job?.sourceFile || typeof job.sourceFile !== 'object') return null;
   const fileB64 = typeof job.sourceFile.fileB64 === 'string'
     ? job.sourceFile.fileB64
     : (typeof job.sourceFile.docxB64 === 'string' ? job.sourceFile.docxB64 : null);
   if (!fileB64) return null;
-  return {
+  const out = {
     name: sanitizeFilename(job.sourceFile.name),
     ext: String(job.sourceFile.ext || '').toLowerCase().slice(0, 8),
     fileB64
   };
+  const okapi = sanitizeOkapiPackage(job.sourceFile.okapi);
+  if (okapi) out.okapi = okapi;
+  return out;
 }
 
 async function assertHuman(req, body, { secret, turnstile }) {
@@ -510,6 +542,10 @@ function buildClientJob(body, pricing = {}) {
       const incomingB64 = incoming.fileB64 || incoming.docxB64;
       if (!incomingB64) throw new Error('Original file is required');
       sourceFile.fileB64 = scanSourceFileBase64(ext, incomingB64);
+    }
+    if (ext === 'docx') {
+      const okapi = sanitizeOkapiPackage(incoming.okapi);
+      if (okapi) sourceFile.okapi = okapi;
     }
   }
 
@@ -568,6 +604,7 @@ module.exports = {
   sanitizeQaFindings,
   revisorJob,
   sourceFileForDownload,
+  sanitizeOkapiPackage,
   rateLimit,
   canAccessJob,
   sanitizeClientId,

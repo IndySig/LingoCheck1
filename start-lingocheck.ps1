@@ -36,6 +36,19 @@ Stop-PortListener -p $Port
 
 $env:PORT = "$Port"
 Set-Location $PSScriptRoot
+
+# Prefer local portable JRE / Okapi from scripts/setup-okapi.ps1
+$localJre = Join-Path $PSScriptRoot ".tools\jre"
+$localJava = Join-Path $localJre "bin\java.exe"
+if (Test-Path -LiteralPath $localJava) {
+  $env:JAVA_HOME = $localJre
+  $env:PATH = (Join-Path $localJre "bin") + ";" + $env:PATH
+}
+$localOkapi = Join-Path $PSScriptRoot ".tools\okapi"
+if (Test-Path -LiteralPath (Join-Path $localOkapi "tikal.bat")) {
+  $env:OKAPI_HOME = $localOkapi
+}
+
 $nodeExe = Resolve-NodeExe
 & $nodeExe ".\server.js"
 

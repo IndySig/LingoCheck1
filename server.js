@@ -6,6 +6,7 @@ const crypto = require('crypto');
 const tls = require('tls');
 
 const security = require('./security');
+const okapi = require('./okapi');
 
 const PUBLIC_DIR = path.join(__dirname, 'public');
 const JOBS_FILE = path.join(__dirname, 'jobs.json');
@@ -22,6 +23,7 @@ const STALE_CLAIM_MS = 4 * 60 * 60 * 1000;
 const MAX_JSON_BODY = 1024 * 1024;
 const MAX_JOB_BODY = 16 * 1024 * 1024;
 const MAX_TRANSLATE_BODY = 128 * 1024;
+const MAX_OKAPI_BODY = 20 * 1024 * 1024;
 
 function loadAuthConfig() {
   // Used for SESSION_SECRET (required) and an optional legacy admin login.
@@ -1024,6 +1026,118 @@ async function handleJobsCreate(req, res) {
   return sendJson(res, 200, security.publicJob(job));
 }
 
+async function handleOkapiExtract(req, res) {
+  if (!enforceJsonContentType(req, res)) return;
+  if (!enforceRateLimit(req, res, 'okapi-extract', { limit: 10, windowMs: 60 * 1000 })) return;
+  const status = okapi.getStatus();
+  if (!status.ready) return sendJson(res, 503, { error: status.message, okapi: status });
+
+  const body = await readBodyJson(req, MAX_OKAPI_BODY);
+  if (!(await requireHuman(req, res, body))) return;
+
+  const language = security.sanitizeLanguage(body.language) || 'Dutch';
+  const fileB64 = typeof body.fileB64 === 'string' ? body.fileB64 : '';
+  const fileName = String(body.fileName || body.name || 'document.docx');
+  if (!fileB64) return sendJson(res, 400, { error: 'fileB64 is required' });
+
+  let buf;
+  try {
+    buf = Buffer.from(fileB64, 'base64');
+  } catch {
+    return sendJson(res, 400, { error: 'Invalid file data' });
+  }
+  if (!buf.length || buf.length > 10 * 1024 * 1024) {
+    return sendJson(res, 400, { error: 'File too large (max 10 MB)' });
+  }
+
+  try {
+    const extracted = okapi.extractDocx(buf, {
+      sourceLang: 'English',
+      targetLang: language,
+      fileName
+    });
+    const text = security.sanitizeText(extracted.text) || extracted.text.slice(0, 25000);
+    const segments = (extracted.segments || [])
+      .map((s) => security.sanitizeText(s))
+      .filter(Boolean)
+      .slice(0, 800);
+    const sentences = security.sanitizeSentenceList(extracted.sentences) || [];
+    const sentenceParaMap = Array.isArray(extracted.sentenceParaMap)
+      ? extracted.sentenceParaMap.slice(0, sentences.length)
+      : [];
+    return sendJson(res, 200, {
+      text,
+      segments,
+      sentences,
+      sentenceParaMap,
+      okapi: {
+        xliffB64: extracted.xliffB64,
+        skeletons: extracted.skeletons,
+        sourceLang: extracted.sourceLang,
+        targetLang: extracted.targetLang,
+        fileName: extracted.fileName,
+        sentenceCount: extracted.sentenceCount
+      }
+    });
+  } catch (e) {
+    console.error('[LingoCheck] Okapi extract failed:', e?.message || e);
+    return sendJson(res, 502, { error: e?.message || 'Okapi extract failed' });
+  }
+}
+
+async function handleOkapiMerge(req, res) {
+  if (!enforceJsonContentType(req, res)) return;
+  if (!enforceRateLimit(req, res, 'okapi-merge', { limit: 10, windowMs: 60 * 1000 })) return;
+  const status = okapi.getStatus();
+  if (!status.ready) return sendJson(res, 503, { error: status.message, okapi: status });
+
+  const body = await readBodyJson(req, MAX_OKAPI_BODY);
+  if (!(await requireHuman(req, res, body))) return;
+
+  const fileB64 = typeof body.fileB64 === 'string' ? body.fileB64 : '';
+  const pkg = security.sanitizeOkapiPackage(body.okapi);
+  const translations = security.sanitizeSentenceList(body.translations)
+    || security.sanitizeSentenceList(body.translationSentences);
+  if (!fileB64) return sendJson(res, 400, { error: 'Original DOCX is required' });
+  if (!pkg?.xliffB64) return sendJson(res, 400, { error: 'Okapi XLIFF package is required' });
+  if (!translations?.length) return sendJson(res, 400, { error: 'Translated sentences are required' });
+
+  let original;
+  try {
+    original = Buffer.from(fileB64, 'base64');
+  } catch {
+    return sendJson(res, 400, { error: 'Invalid original file data' });
+  }
+  if (!original.length || original.length > 10 * 1024 * 1024) {
+    return sendJson(res, 400, { error: 'Original file too large' });
+  }
+
+  let xliffXml;
+  try {
+    xliffXml = Buffer.from(pkg.xliffB64, 'base64').toString('utf8');
+  } catch {
+    return sendJson(res, 400, { error: 'Invalid XLIFF data' });
+  }
+
+  try {
+    const out = okapi.mergeDocx(original, xliffXml, {
+      skeletons: pkg.skeletons,
+      sourceLang: pkg.sourceLang,
+      targetLang: pkg.targetLang,
+      fileName: pkg.fileName || 'document.docx',
+      translations
+    });
+    return sendJson(res, 200, {
+      fileB64: out.toString('base64'),
+      mime: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+      mode: 'okapi'
+    });
+  } catch (e) {
+    console.error('[LingoCheck] Okapi merge failed:', e?.message || e);
+    return sendJson(res, 502, { error: e?.message || 'Okapi merge failed' });
+  }
+}
+
 async function handleRevisorClaim(req, res, id, session) {
   const jobs = loadJobs();
   const idx = jobs.findIndex(j => j.id === id);
@@ -1153,13 +1267,26 @@ const server = http.createServer(async (req, res) => {
       if (!enforceRateLimit(req, res, 'public-config', { limit: 60, windowMs: 60 * 1000 })) return;
       const turnstile = security.loadTurnstileConfig(readAuthFile);
       const pricing = loadPricingConfig();
+      const okapiStatus = okapi.getStatus();
       return sendJson(res, 200, {
         turnstileSiteKey: turnstile.enabled ? turnstile.siteKey : null,
         clientPerWordEur: pricing.clientPerWordEur,
         agencyPerWordEur: pricing.agencyPerWordEur,
         payoutPerWordCents: pricing.payoutPerWordCents,
-        staleClaimHours: STALE_CLAIM_MS / (60 * 60 * 1000)
+        staleClaimHours: STALE_CLAIM_MS / (60 * 60 * 1000),
+        okapiReady: !!okapiStatus.ready,
+        okapiMessage: okapiStatus.message
       });
+    }
+    if (method === 'GET' && pathname === '/api/okapi/status') {
+      if (!enforceRateLimit(req, res, 'okapi-status', { limit: 60, windowMs: 60 * 1000 })) return;
+      return sendJson(res, 200, okapi.getStatus());
+    }
+    if (method === 'POST' && pathname === '/api/okapi/extract') {
+      return await handleOkapiExtract(req, res);
+    }
+    if (method === 'POST' && pathname === '/api/okapi/merge') {
+      return await handleOkapiMerge(req, res);
     }
     if (method === 'GET' && pathname === '/api/challenge') {
       if (!enforceRateLimit(req, res, 'challenge', { limit: 30, windowMs: 60 * 1000 })) return;
@@ -1363,6 +1490,13 @@ const server = http.createServer(async (req, res) => {
 });
 
 const PORT = process.env.PORT || 5000;
+const okapiBoot = okapi.getStatus();
+if (okapiBoot.ready) {
+  console.log(`[LingoCheck] Okapi Tikal ready (${okapiBoot.okapiHome})`);
+} else {
+  console.log(`[LingoCheck] Okapi not ready — ${okapiBoot.message}`);
+}
+
 server.listen(PORT, '0.0.0.0', () => {
   ensureAuthConfig();
   const smtp = loadSmtpConfig();

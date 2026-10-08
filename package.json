@@ -4,7 +4,10 @@
   "description": "LingoCheck MVP — AI + Human Translation Demo",
   "main": "server.js",
   "scripts": {
-    "start": "node server.js"
+    "start": "node server.js",
+    "build": "node ./scripts/setup-okapi-auto.js",
+    "setup:okapi": "node ./scripts/setup-okapi-auto.js",
+    "smoke:okapi": "node ./scripts/smoke-okapi.js"
   },
   "dependencies": {},
   "engines": {

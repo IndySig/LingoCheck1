@@ -373,11 +373,19 @@ async function makeStyledDocxBlobFromTemplate(templateDocxB64, translatedText, o
 }
 
 function winAnsiSafe(s){
-  return String(s||"").replace(/[^\x09\x0A\x0D\x20-\x7E\xA0-\xFF]/g, "?");
+  // Helvetica / WinAnsi can't draw many Unicode bullets and symbols used in manuals.
+  return String(s||"")
+    .replace(/[\u2022\u2023\u2043\u2219\u25AA\u25AB\u25CF\u25E6\u25A0\u25A1\u25CB\u25E7▪•●◦▪︎]/g, "-")
+    .replace(/[\u2013\u2014\u2212]/g, "-")
+    .replace(/[\u2018\u2019\u201A\u2032]/g, "'")
+    .replace(/[\u201C\u201D\u201E\u2033]/g, '"')
+    .replace(/\u2026/g, "...")
+    .replace(/\u00A0/g, " ")
+    .replace(/[^\x09\x0A\x0D\x20-\x7E\xA0-\xFF]/g, "?");
 }
 
 function wrapPdfLine(font, str, fontSize, maxWidth){
-  const words = String(str||"").split(/\s+/).filter(Boolean);
+  const words = winAnsiSafe(String(str||"")).split(/\s+/).filter(Boolean);
   if(!words.length) return [""];
   const lines = [];
   let cur = "";
@@ -515,12 +523,17 @@ async function makePdfBlobFromText(text){
   const lineHeight = 14;
 
   function wrapLine(str, maxWidth){
-    const words = str.split(/\s+/).filter(Boolean);
+    const words = String(str||"").split(/\s+/).filter(Boolean);
     const lines = [];
     let cur = "";
     for(const w of words){
       const test = cur ? (cur + " " + w) : w;
-      const width = font.widthOfTextAtSize(test, fontSize);
+      let width;
+      try{
+        width = font.widthOfTextAtSize(test, fontSize);
+      }catch{
+        width = test.length * fontSize * 0.5;
+      }
       if(width <= maxWidth){
         cur = test;
       }else{
@@ -532,7 +545,7 @@ async function makePdfBlobFromText(text){
     return lines;
   }
 
-  const paragraphs = String(text||"").split(/\n{2,}/g);
+  const paragraphs = winAnsiSafe(String(text||"")).split(/\n{2,}/g);
   let page = pdfDoc.addPage();
   let { width, height } = page.getSize();
   let y = height - margin;
@@ -547,7 +560,10 @@ async function makePdfBlobFromText(text){
         ({ width, height } = page.getSize());
         y = height - margin;
       }
-      page.drawText(line, { x: margin, y, size: fontSize, font, color: PDFLib.rgb(0,0,0) });
+      const safeLine = winAnsiSafe(line);
+      if(safeLine){
+        page.drawText(safeLine, { x: margin, y, size: fontSize, font, color: PDFLib.rgb(0,0,0) });
+      }
       y -= lineHeight;
     }
     y -= lineHeight; // paragraph gap
@@ -596,10 +612,12 @@ function ClientView({clientId}){
     agencyPerWordEur: DEFAULT_AGENCY_PER_WORD_EUR,
     payoutPerWordCents: 2.5
   });
+  const[okapiReady,setOkapiReady]=useState(false);
   const fileRef=useRef();
   const sourceFileB64Ref=useRef(null);
   const textSegmentsRef=useRef([]);
   const sentencePackRef=useRef(null);
+  const okapiPackageRef=useRef(null);
   const deliveryTokenRef=useRef("");
   const turnstileRef=useRef();
   const turnstileWidget=useRef(null);
@@ -625,6 +643,7 @@ function ClientView({clientId}){
         const cfg=await apiFetch("/api/public-config");
         if(alive){
           setTurnstileSiteKey(cfg.turnstileSiteKey||null);
+          setOkapiReady(!!cfg.okapiReady);
           setRates(prev=>({
             clientPerWordEur: typeof cfg.clientPerWordEur==="number"?cfg.clientPerWordEur:prev.clientPerWordEur,
             agencyPerWordEur: typeof cfg.agencyPerWordEur==="number"?cfg.agencyPerWordEur:prev.agencyPerWordEur,
@@ -747,6 +766,21 @@ function ClientView({clientId}){
   }
 
   function buildSentencePackFromInput(){
+    const pack = sentencePackRef.current;
+    if(
+      pack &&
+      Array.isArray(pack.sentences) &&
+      pack.sentences.length &&
+      pack.fromOkapi
+    ){
+      return {
+        sentences: pack.sentences,
+        paraMap: pack.paraMap || pack.sentences.map(()=>0),
+        paragraphCount: pack.paragraphCount || (textSegmentsRef.current.length || 1),
+        translationSentences: pack.translationSentences || null,
+        fromOkapi: true
+      };
+    }
     const TS = window.LcTextSegments;
     if(!TS) return null;
     const segments = textSegmentsRef.current.length
@@ -833,7 +867,12 @@ function ClientView({clientId}){
         aiTranslation: qaOnly ? (aiResult.trim() || inputText.trim()) : aiResult,
         qaOnly,
         qaFindings: qaOnly ? qaFindings : null,
-        sourceFile: { name, ext, fileB64: sourceFile?.fileB64 || sourceFileB64Ref.current || null },
+        sourceFile: {
+          name,
+          ext,
+          fileB64: sourceFile?.fileB64 || sourceFileB64Ref.current || null,
+          okapi: (ext==="docx" && (sourceFile?.okapi || okapiPackageRef.current)) || undefined
+        },
         ...botFields()
       })});
       setCurrentJob({
@@ -880,7 +919,7 @@ function ClientView({clientId}){
 
   function handleReset(){
     setStage("idle");setInputText("");setAiResult("");setCurrentJob(null);setError("");setSourceFile(null);setFileScan(null);setUseOwnAi(true);setShowFullDraft(false);setQaFindings(null);
-    sourceFileB64Ref.current=null;textSegmentsRef.current=[];sentencePackRef.current=null;
+    sourceFileB64Ref.current=null;textSegmentsRef.current=[];sentencePackRef.current=null;okapiPackageRef.current=null;
     deliveryTokenRef.current="";
     try{ localStorage.removeItem("lc_open_job"); }catch{}
     if(location.search) history.replaceState({}, "", location.pathname);
@@ -902,27 +941,58 @@ function ClientView({clientId}){
     if(fileRef.current) fileRef.current.value="";
   }
 
-  function applyExtractedText(raw, segments, file, sourceExt, baseReason){
+  function applyExtractedText(raw, segments, file, sourceExt, baseReason, extras){
     const DX = window.LcDocExtract;
     const TS = window.LcTextSegments;
-    const segs = TS
-      ? TS.normalizeDocumentSegments((Array.isArray(segments) && segments.length) ? segments : raw)
-      : (Array.isArray(segments) && segments.length ? segments : String(raw||"").split(/\n{2,}/).map(s => s.trim()).filter(Boolean));
-    const text = DX ? DX.truncateExtractedText(TS ? TS.segmentsToDisplayText(segs) : segs.join("\n\n")) : String(raw||"").slice(0, 25000);
+    const fromOkapi = !!(extras && extras.fromOkapi);
+    let segs;
+    if(fromOkapi && Array.isArray(segments) && segments.length){
+      segs = segments.map(function(s){ return String(s||"").trim(); }).filter(Boolean);
+    } else if(TS){
+      segs = TS.normalizeDocumentSegments((Array.isArray(segments) && segments.length) ? segments : raw);
+    } else {
+      segs = Array.isArray(segments) && segments.length
+        ? segments
+        : String(raw||"").split(/\n{2,}/).map(s => s.trim()).filter(Boolean);
+    }
+    const joined = fromOkapi
+      ? segs.join("\n\n")
+      : (TS ? TS.segmentsToDisplayText(segs) : segs.join("\n\n"));
+    const text = DX ? DX.truncateExtractedText(joined) : String(raw||"").slice(0, 25000);
     const truncated = String(raw||"").length > text.length;
     textSegmentsRef.current = segs;
+    if(extras && Array.isArray(extras.sentences) && extras.sentences.length){
+      sentencePackRef.current = {
+        sentences: extras.sentences,
+        paraMap: extras.sentenceParaMap || extras.sentences.map(()=>0),
+        paragraphCount: segs.length || 1,
+        translationSentences: null,
+        fromOkapi: fromOkapi
+      };
+    } else {
+      sentencePackRef.current = null;
+    }
+    if(extras && extras.okapi){
+      okapiPackageRef.current = extras.okapi;
+    } else if(sourceExt !== "docx") {
+      okapiPackageRef.current = null;
+    }
     setInputText(text);
     setFileScan({
       name: file.name,
       fit: true,
       reason: truncated ? baseReason + " (truncated to 25,000 characters)" : baseReason
     });
-    setSourceFile({ name: file.name, ext: sourceExt });
+    setSourceFile({
+      name: file.name,
+      ext: sourceExt,
+      okapi: extras && extras.okapi ? extras.okapi : undefined
+    });
   }
 
   async function handleFile(e){
     const file=e.target.files[0];if(!file)return;
-    setError("");setFileScan(null);setSourceFile(null);sourceFileB64Ref.current=null;textSegmentsRef.current=[];sentencePackRef.current=null;
+    setError("");setFileScan(null);setSourceFile(null);sourceFileB64Ref.current=null;textSegmentsRef.current=[];sentencePackRef.current=null;okapiPackageRef.current=null;
     const name=(file.name||"").toLowerCase();
     const max=10*1024*1024;
     if(file.size>max){setError("File too large (max 10 MB).");return;}
@@ -961,24 +1031,62 @@ function ClientView({clientId}){
       }
       if(name.endsWith(".docx")){
         const buf = await fileToArrayBuffer(file);
-        const r=await DX.extractDocxText(buf);
-        if(r.blocked){
-          setFileScan({name:file.name,fit:false,reason:"Word document contains macros or executable content."});
-          setInputText("");
-          return;
-        }
-        if(!r.text){
-          setFileScan({name:file.name,fit:false,reason:"Word document has no extractable text."});
-          setInputText("");
-          return;
-        }
-        const reason = (r.hasImages||r.hasDrawing)
-          ? "Text extracted; images will be kept on download."
-          : "Word text extracted";
-        applyExtractedText(r.text, r.segments, file, "docx", reason);
         const fileB64=arrayBufferToBase64(buf);
         sourceFileB64Ref.current=fileB64;
-        setSourceFile(prev=>({...prev, fileB64}));
+        let usedOkapi=false;
+        if(okapiReady){
+          try{
+            if(!challengeRef.current) await refreshChallenge();
+            const payload=()=>({
+              fileB64,
+              fileName: file.name,
+              language,
+              ...botFields()
+            });
+            let data;
+            try{
+              data=await apiFetch("/api/okapi/extract",{method:"POST",body:JSON.stringify(payload())});
+            }catch(first){
+              const msg=String(first.message||"");
+              if(/Verification expired|Confirm you are human/i.test(msg)){
+                await refreshChallenge();
+                data=await apiFetch("/api/okapi/extract",{method:"POST",body:JSON.stringify(payload())});
+              }else throw first;
+            }
+            if(data && data.text && Array.isArray(data.sentences) && data.sentences.length){
+              applyExtractedText(data.text, data.segments || data.sentences, file, "docx",
+                "Word extracted with Okapi (layout-preserving round-trip)", {
+                  sentences: data.sentences,
+                  sentenceParaMap: data.sentenceParaMap,
+                  okapi: data.okapi,
+                  fromOkapi: true
+                });
+              setSourceFile(prev=>({...prev, fileB64, okapi: data.okapi}));
+              usedOkapi=true;
+              refreshChallenge();
+            }
+          }catch(okErr){
+            console.warn("Okapi extract failed, falling back to browser parser:", okErr);
+          }
+        }
+        if(!usedOkapi){
+          const r=await DX.extractDocxText(buf);
+          if(r.blocked){
+            setFileScan({name:file.name,fit:false,reason:"Word document contains macros or executable content."});
+            setInputText("");
+            return;
+          }
+          if(!r.text){
+            setFileScan({name:file.name,fit:false,reason:"Word document has no extractable text."});
+            setInputText("");
+            return;
+          }
+          const reason = (r.hasImages||r.hasDrawing)
+            ? "Text extracted; images will be kept on download."
+            : "Word text extracted";
+          applyExtractedText(r.text, r.segments, file, "docx", reason);
+          setSourceFile(prev=>({...prev, fileB64}));
+        }
         return;
       }
       setError("Unsupported file type. Upload .txt, .md, .docx, or .pdf.");
@@ -1003,6 +1111,47 @@ function ClientView({clientId}){
     }
   }
 
+  async function getOkapiPackage(meta){
+    if(meta?.okapi?.xliffB64) return meta.okapi;
+    if(okapiPackageRef.current?.xliffB64) return okapiPackageRef.current;
+    if(sourceFile?.okapi?.xliffB64) return sourceFile.okapi;
+    if(!currentJob?.id) return null;
+    try{
+      const data=await apiFetch("/api/jobs/"+encodeURIComponent(currentJob.id)+"/source?"+jobAccessQuery());
+      if(data?.okapi?.xliffB64){
+        okapiPackageRef.current=data.okapi;
+        return data.okapi;
+      }
+    }catch{}
+    return null;
+  }
+
+  function translationSentencesForMerge(text){
+    const expected = (okapiPackageRef.current && okapiPackageRef.current.sentenceCount)
+      || (sentencePackRef.current && sentencePackRef.current.sentences && sentencePackRef.current.sentences.length)
+      || 0;
+    if(
+      currentJob &&
+      Array.isArray(currentJob.translationSentences) &&
+      currentJob.translationSentences.length &&
+      (!expected || currentJob.translationSentences.length === expected)
+    ){
+      return currentJob.translationSentences;
+    }
+    const pack = sentencePackRef.current;
+    if(pack?.fromOkapi && Array.isArray(pack.translationSentences) && pack.translationSentences.length){
+      return pack.translationSentences;
+    }
+    const sourceSentences = (pack?.fromOkapi && pack.sentences)
+      || (currentJob && currentJob.sourceSentences)
+      || null;
+    if(Array.isArray(sourceSentences) && sourceSentences.length){
+      const weights = sourceSentences.map(function(s){ return Math.max(1, String(s).replace(/\s+/g,"").length); });
+      return splitTextByWeights(String(text||"").replace(/\n+/g," "), weights);
+    }
+    return null;
+  }
+
   async function downloadTranslated(){
     setDownloadNote("");
     const meta = currentJob.sourceFile || { name:"translation.txt", ext:"txt" };
@@ -1017,6 +1166,42 @@ function ClientView({clientId}){
     const fileB64 = await getSourceFileB64(meta);
     if(!fileB64) throw new Error("Original file is unavailable. Open the link from your email and try again.");
     if(ext==="docx"){
+      const okapiPkg = await getOkapiPackage(meta);
+      if(okapiReady && okapiPkg?.xliffB64){
+        try{
+          if(!challengeRef.current) await refreshChallenge();
+          const translations = translationSentencesForMerge(text);
+          if(!translations || !translations.length){
+            throw new Error("Missing Okapi sentence translations");
+          }
+          const payload=()=>({
+            fileB64,
+            okapi: okapiPkg,
+            translations,
+            ...botFields()
+          });
+          let data;
+          try{
+            data=await apiFetch("/api/okapi/merge",{method:"POST",body:JSON.stringify(payload())});
+          }catch(first){
+            const msg=String(first.message||"");
+            if(/Verification expired|Confirm you are human/i.test(msg)){
+              await refreshChallenge();
+              data=await apiFetch("/api/okapi/merge",{method:"POST",body:JSON.stringify(payload())});
+            }else throw first;
+          }
+          if(data?.fileB64){
+            const bytes = base64ToUint8Array(data.fileB64);
+            setDownloadNote("Downloaded with Okapi — original Word layout preserved.");
+            refreshChallenge();
+            return downloadBlob(new Blob([bytes], {
+              type: "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+            }), finalName);
+          }
+        }catch(okErr){
+          console.warn("Okapi merge failed, falling back to styled template:", okErr);
+        }
+      }
       try{
         const blob = await makeStyledDocxBlobFromTemplate(fileB64, text, segments);
         return downloadBlob(blob, finalName);
@@ -1036,9 +1221,15 @@ function ClientView({clientId}){
         return downloadBlob(blob, finalName);
       }catch(err){
         console.warn("Styled PDF download failed, falling back to plain PDF:", err);
-        setDownloadNote("Layout could not be preserved; downloaded as a clean readable PDF instead.");
-        const blob = await makePdfBlobFromText(text);
-        return downloadBlob(blob, finalName);
+        try{
+          const blob = await makePdfBlobFromText(text);
+          setDownloadNote("Layout could not be preserved; downloaded as a clean readable PDF instead.");
+          return downloadBlob(blob, finalName);
+        }catch(pdfErr){
+          console.warn("Clean PDF download failed, falling back to text:", pdfErr);
+          setDownloadNote("PDF layout/export failed; downloaded as plain text instead.");
+          return downloadBlob(new Blob([text],{type:"text/plain;charset=utf-8"}), `${baseName}-translated.txt`);
+        }
       }
     }
     return downloadBlob(new Blob([text],{type:"text/plain;charset=utf-8"}), `${baseName}-translated.txt`);
