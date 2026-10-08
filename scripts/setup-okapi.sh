@@ -75,7 +75,20 @@ export OKAPI_HOME
 export PATH="$JAVA_HOME/bin:$PATH"
 
 echo "==> Verifying Tikal..."
-"$JAVA_HOME/bin/java" -cp "$OKAPI_HOME/lib/*" net.sf.okapi.applications.tikal.Main -h | head -n 8
+# Don't pipe to head: with set -e that can exit 141 (SIGPIPE) on Linux and
+# falsely mark a successful install as failed on headless hosts like Render.
+set +e
+"$JAVA_HOME/bin/java" -cp "$OKAPI_HOME/lib/*" net.sf.okapi.applications.tikal.Main -h >/tmp/lc-tikal-help.txt 2>&1
+TIKAL_RC=$?
+set -e
+if [[ -f /tmp/lc-tikal-help.txt ]]; then
+  head -n 8 /tmp/lc-tikal-help.txt || true
+fi
+# -h may return non-zero on headless SWT; accept if the help banner printed.
+if [[ $TIKAL_RC -ne 0 ]] && ! grep -qi "Okapi Tikal" /tmp/lc-tikal-help.txt 2>/dev/null; then
+  echo "Tikal verification failed (exit $TIKAL_RC)" >&2
+  exit 1
+fi
 
 echo
 echo "Okapi setup complete."

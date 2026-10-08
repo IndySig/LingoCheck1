@@ -8,13 +8,20 @@ const path = require('path');
 const root = path.join(__dirname, '..');
 const okapi = require(path.join(root, 'okapi.js'));
 
-const status = okapi.getStatus();
-if (status.ready) {
-  console.log('[LingoCheck] Okapi already ready');
+function report(status, label) {
+  if (status.ready) {
+    console.log(`[LingoCheck] Okapi ready (${status.okapiHome})${label ? ` ${label}` : ''}`);
+    return true;
+  }
+  console.log(`[LingoCheck] Okapi not ready${label ? ` ${label}` : ''}: ${status.message}`);
+  return false;
+}
+
+if (report(okapi.getStatus(), 'before setup')) {
   process.exit(0);
 }
 
-console.log(`[LingoCheck] Okapi not ready (${status.message}). Installing...`);
+console.log('[LingoCheck] Installing Okapi (Java + Tikal)...');
 const setup = path.join(__dirname, 'setup-okapi-auto.js');
 const result = spawnSync(process.execPath, [setup], {
   cwd: root,
@@ -22,16 +29,14 @@ const result = spawnSync(process.execPath, [setup], {
   env: process.env
 });
 
-if (result.status !== 0) {
-  console.error('[LingoCheck] Okapi install failed — DOCX will use the browser fallback layout path.');
-  // Do not block server start; translation still works without Okapi.
+const after = okapi.getStatus();
+if (report(after, 'after setup')) {
   process.exit(0);
 }
 
-const after = okapi.getStatus();
-if (after.ready) {
-  console.log(`[LingoCheck] Okapi install complete (${after.okapiHome})`);
-} else {
-  console.error(`[LingoCheck] Okapi still not ready after install: ${after.message}`);
+if (result.status !== 0) {
+  console.error(`[LingoCheck] Okapi setup exited with code ${result.status}.`);
 }
+console.error('[LingoCheck] Okapi still unavailable — DOCX will use the browser fallback layout path.');
+// Do not block server start; translation still works without Okapi.
 process.exit(0);
