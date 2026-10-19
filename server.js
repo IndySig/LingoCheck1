@@ -270,7 +270,9 @@ async function sendDeliveryEmail(req, job) {
   const to = String(job?.clientEmail || '').trim();
   if (!to) return { sent: false, reason: 'no-email' };
   const token = String(job.deliveryToken || '');
-  const link = `${publicBaseUrl(req)}/?job=${encodeURIComponent(job.id)}&t=${encodeURIComponent(token)}`;
+  const link = token
+    ? `${publicBaseUrl(req)}/d/${encodeURIComponent(job.id)}/${encodeURIComponent(token)}`
+    : `${publicBaseUrl(req)}/`;
   const translation = String(job.revisedTranslation || '').trim();
   const lang = job.language || 'your language';
   const findings = security.sanitizeQaFindings(job.qaFindings);
@@ -1410,9 +1412,9 @@ function snapshotFromBody(body) {
 }
 
 async function handlePropagate(req, res, id, session) {
+  const body = await readBodyJson(req);
   const loaded = loadClaimedJob(id, session);
   if (loaded.error) return sendJson(res, loaded.error.status, { error: loaded.error.error });
-  const body = await readBodyJson(req);
   const snap = snapshotFromBody(body);
   if (!snap) return sendJson(res, 400, { error: 'Segment list is required' });
   const sourceIndex = Number(body.sourceIndex);
@@ -1494,9 +1496,9 @@ async function handlePropagate(req, res, id, session) {
 }
 
 async function handlePropagateUndo(req, res, id, session) {
+  const body = await readBodyJson(req);
   const loaded = loadClaimedJob(id, session);
   if (loaded.error) return sendJson(res, loaded.error.status, { error: loaded.error.error });
-  const body = await readBodyJson(req);
   const requested = Array.isArray(body.revisionIds) && body.revisionIds.length
     ? body.revisionIds.map((item) => String(item || '')).filter(Boolean)
     : [String(body.revisionId || '')].filter(Boolean);
@@ -1533,15 +1535,16 @@ async function handlePropagateUndo(req, res, id, session) {
 }
 
 async function handleRevisorPatch(req, res, id, session) {
+  const body = await readBodyJson(req);
   const jobs = loadJobs();
   const idx = jobs.findIndex(j => j.id === id);
   if (idx === -1) return sendJson(res, 404, { error: 'Job not found' });
   const job = jobs[idx];
+  if (job.status === 'complete') return sendJson(res, 400, { error: 'Completed jobs cannot be edited' });
   if (!job.claimedByRevisorId) return sendJson(res, 403, { error: 'Claim this job first' });
   if (job.claimedByRevisorId !== session.revisorId) {
     return sendJson(res, 403, { error: 'This job is claimed by another revisor' });
   }
-  const body = await readBodyJson(req);
   const revised = typeof body.revisedTranslation === 'string'
     ? security.sanitizeText(body.revisedTranslation, security.MAX_TEXT_CHARS)
     : job.revisedTranslation;
@@ -1574,8 +1577,13 @@ async function handleRevisorPatch(req, res, id, session) {
   if (completing) {
     const mail = await sendDeliveryEmail(req, merged);
     if (mail.sent) {
-      jobs[idx] = { ...merged, deliveryEmailedAt: Date.now() };
-      saveJobs(jobs);
+      const fresh = loadJobs();
+      const freshIdx = fresh.findIndex(j => j.id === id);
+      if (freshIdx !== -1) {
+        fresh[freshIdx] = { ...fresh[freshIdx], deliveryEmailedAt: Date.now() };
+        saveJobs(fresh);
+        jobs[idx] = fresh[freshIdx];
+      }
     }
   }
   return sendJson(res, 200, security.revisorJob(jobs[idx]));
@@ -1611,6 +1619,9 @@ const server = http.createServer(async (req, res) => {
 
     // Pages
     if (method === 'GET' && pathname === '/') return serveStatic(req, res, '/', { defaultFile: '/index.html' });
+    if (method === 'GET' && /^\/d\/[A-Za-z0-9_-]{6,64}\/[a-f0-9]{32,128}$/.test(pathname)) {
+      return serveStatic(req, res, '/index.html');
+    }
     if (method === 'GET' && pathname === '/login') return serveStatic(req, res, '/login.html');
     if (method === 'GET' && pathname === '/revisor') {
       if (!requireRevisor(req)) return sendRedirect(res, '/login');
