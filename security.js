@@ -287,11 +287,15 @@ function sanitizeQaFindings(raw) {
 
 function publicJob(job) {
   if (!job) return null;
+  const packId = job.sourceFile && /^[a-f0-9]{32}$/.test(String(job.sourceFile.packId || ''))
+    ? String(job.sourceFile.packId)
+    : '';
   const sourceFile = job.sourceFile && typeof job.sourceFile === 'object'
     ? {
         name: sanitizeFilename(job.sourceFile.name),
         ext: String(job.sourceFile.ext || '').toLowerCase().slice(0, 8),
-        hasOkapi: !!(job.sourceFile.okapi && job.sourceFile.okapi.xliffB64)
+        hasOkapi: !!(packId || (job.sourceFile.okapi && job.sourceFile.okapi.xliffB64)),
+        packId: packId || undefined
       }
     : null;
   const out = {
@@ -499,12 +503,16 @@ function sourceFileForDownload(job) {
   const fileB64 = typeof job.sourceFile.fileB64 === 'string'
     ? job.sourceFile.fileB64
     : (typeof job.sourceFile.docxB64 === 'string' ? job.sourceFile.docxB64 : null);
-  if (!fileB64) return null;
+  const packId = /^[a-f0-9]{32}$/.test(String(job.sourceFile.packId || ''))
+    ? String(job.sourceFile.packId)
+    : '';
+  if (!fileB64 && !packId) return null;
   const out = {
     name: sanitizeFilename(job.sourceFile.name),
-    ext: String(job.sourceFile.ext || '').toLowerCase().slice(0, 8),
-    fileB64
+    ext: String(job.sourceFile.ext || '').toLowerCase().slice(0, 8)
   };
+  if (fileB64) out.fileB64 = fileB64;
+  if (packId) out.packId = packId;
   const okapi = sanitizeOkapiPackage(job.sourceFile.okapi);
   if (okapi) out.okapi = okapi;
   return out;
@@ -552,13 +560,18 @@ function buildClientJob(body, pricing = {}) {
   if (incoming && typeof incoming === 'object') {
     const ext = String(incoming.ext || '').toLowerCase().replace(/[^a-z0-9]/g, '').slice(0, 8);
     if (!['txt', 'md', 'pdf', 'docx'].includes(ext)) throw new Error('Unsupported file type');
-    sourceFile = { name: sanitizeFilename(incoming.name || `translation.${ext}`), ext, fileB64: null };
-    if (ext === 'docx' || ext === 'pdf') {
+    const packId = typeof incoming.packId === 'string' && /^[a-f0-9]{32}$/.test(incoming.packId)
+      ? incoming.packId
+      : '';
+    sourceFile = { name: sanitizeFilename(incoming.name || `translation.${ext}`), ext };
+    if (ext === 'docx' && packId) {
+      sourceFile.packId = packId;
+    } else if (ext === 'docx' || ext === 'pdf') {
       const incomingB64 = incoming.fileB64 || incoming.docxB64;
       if (!incomingB64) throw new Error('Original file is required');
       sourceFile.fileB64 = scanSourceFileBase64(ext, incomingB64);
     }
-    if (ext === 'docx') {
+    if (ext === 'docx' && !sourceFile.packId) {
       const okapi = sanitizeOkapiPackage(incoming.okapi);
       if (okapi) sourceFile.okapi = okapi;
     }

@@ -3,6 +3,7 @@ services:
     name: lingocheck
     runtime: node
     plan: starter
+    region: frankfurt
     buildCommand: npm install && npm run build
     startCommand: npm start
     envVars:

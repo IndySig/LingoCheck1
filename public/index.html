@@ -888,8 +888,13 @@ function ClientView({clientId}){
         sourceFile: {
           name,
           ext,
-          fileB64: sourceFile?.fileB64 || sourceFileB64Ref.current || null,
-          okapi: (ext==="docx" && (sourceFile?.okapi || okapiPackageRef.current)) || undefined
+          packId: (sourceFile?.okapi && sourceFile.okapi.packId) || (okapiPackageRef.current && okapiPackageRef.current.packId) || undefined,
+          fileB64: ((sourceFile?.okapi && sourceFile.okapi.packId) || (okapiPackageRef.current && okapiPackageRef.current.packId))
+            ? null
+            : (sourceFile?.fileB64 || sourceFileB64Ref.current || null),
+          okapi: ((sourceFile?.okapi && sourceFile.okapi.packId) || (okapiPackageRef.current && okapiPackageRef.current.packId))
+            ? undefined
+            : ((ext==="docx" && (sourceFile?.okapi || okapiPackageRef.current)) || undefined)
         },
         ...botFields()
       })});
@@ -1015,7 +1020,39 @@ function ClientView({clientId}){
     });
   }
 
-  async function inspectUpload(file){
+  async function postOkapiExtract(file, buf){
+    if(!challengeRef.current) await refreshChallenge();
+    const send = async () => {
+      const r = await fetch("/api/okapi/extract", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/octet-stream",
+          "X-LC-Filename": encodeURIComponent(file.name || "document.docx"),
+          "X-LC-Language": language,
+          "X-LC-Challenge": challengeRef.current || "",
+          "X-LC-Turnstile": (window.turnstile && turnstileWidget.current!=null) ? (window.turnstile.getResponse(turnstileWidget.current)||"") : "",
+          "X-LC-Honeypot": honeypotValue()
+        },
+        body: buf
+      });
+      const data = await r.json().catch(()=>({}));
+      if(!r.ok) throw new Error(data.error||"Request failed");
+      return data;
+    };
+    try {
+      return await send();
+    } catch(first) {
+      const msg = String(first.message||"");
+      if(/Verification expired|Confirm you are human/i.test(msg)){
+        await refreshChallenge();
+        return await send();
+      }
+      throw first;
+    }
+  }
+
+  async function inspectUpload(file, opts){
+    const keepLayout = !opts || opts.layout !== false;
     const name=(file.name||"").toLowerCase();
     const DX = window.LcDocExtract;
     if(!DX) throw new Error("Document parser not loaded");
@@ -1028,8 +1065,8 @@ function ClientView({clientId}){
       throw new Error("Unsupported file type. Upload .txt, .md, .docx, or .pdf.");
     }
     const buf = await fileToArrayBuffer(file);
-    const fileB64 = arrayBufferToBase64(buf);
     if(name.endsWith(".pdf")){
+      const fileB64 = arrayBufferToBase64(buf);
       const r = await DX.extractPdfText(buf);
       if(r.isScannedLike || !r.text){
         return { fit:false, reason:"PDF has no usable text layer (likely scanned)." };
@@ -1043,26 +1080,10 @@ function ClientView({clientId}){
         fileB64
       };
     }
-    if(okapiReady){
+    if(keepLayout && okapiReady){
       try{
-        if(!challengeRef.current) await refreshChallenge();
-        const payload=()=>({
-          fileB64,
-          fileName: file.name,
-          language,
-          ...botFields()
-        });
-        let data;
-        try{
-          data=await apiFetch("/api/okapi/extract",{method:"POST",body:JSON.stringify(payload())});
-        }catch(first){
-          const msg=String(first.message||"");
-          if(/Verification expired|Confirm you are human/i.test(msg)){
-            await refreshChallenge();
-            data=await apiFetch("/api/okapi/extract",{method:"POST",body:JSON.stringify(payload())});
-          }else throw first;
-        }
-        if(data && data.text && Array.isArray(data.sentences) && data.sentences.length){
+        const data = await postOkapiExtract(file, buf);
+        if(data && data.okapi && data.okapi.packId && data.text && Array.isArray(data.sentences) && data.sentences.length){
           refreshChallenge();
           return {
             fit:true,
@@ -1070,7 +1091,6 @@ function ClientView({clientId}){
             text:data.text,
             segments:data.segments || data.sentences,
             reason:"Word extracted with Okapi (layout-preserving round-trip)",
-            fileB64,
             okapi:data.okapi,
             sentences:data.sentences,
             sentenceParaMap:data.sentenceParaMap,
@@ -1081,6 +1101,7 @@ function ClientView({clientId}){
         console.warn("Okapi extract failed, falling back to browser parser:", okErr);
       }
     }
+    const fileB64 = arrayBufferToBase64(buf);
     const r = await DX.extractDocxText(buf);
     if(r.blocked) return { fit:false, reason:"Word document contains macros or executable content." };
     if(!r.text) return { fit:false, reason:"Word document has no extractable text." };
@@ -1130,7 +1151,7 @@ function ClientView({clientId}){
     if(file.size>25*1024*1024){setError("File too large (max 25 MB).");return;}
     setQaSourceBusy(true);
     try{
-      const result = await inspectUpload(file);
+      const result = await inspectUpload(file, {layout:false});
       if(!result.fit){
         setQaSourceScan({name:file.name,fit:false,reason:result.reason});
         return;
@@ -1180,12 +1201,19 @@ function ClientView({clientId}){
   }
 
   async function getOkapiPackage(meta){
+    if(meta?.okapi?.packId) return meta.okapi;
+    if(meta?.packId) return { packId: meta.packId };
     if(meta?.okapi?.xliffB64) return meta.okapi;
-    if(okapiPackageRef.current?.xliffB64) return okapiPackageRef.current;
-    if(sourceFile?.okapi?.xliffB64) return sourceFile.okapi;
+    if(okapiPackageRef.current?.packId || okapiPackageRef.current?.xliffB64) return okapiPackageRef.current;
+    if(sourceFile?.okapi?.packId || sourceFile?.okapi?.xliffB64) return sourceFile.okapi;
+    if(currentJob?.sourceFile?.packId) return { packId: currentJob.sourceFile.packId };
     if(!currentJob?.id) return null;
     try{
       const data=await apiFetch("/api/jobs/"+encodeURIComponent(currentJob.id)+"/source?"+jobAccessQuery());
+      if(data?.packId){
+        okapiPackageRef.current={ packId: data.packId };
+        return okapiPackageRef.current;
+      }
       if(data?.okapi?.xliffB64){
         okapiPackageRef.current=data.okapi;
         return data.okapi;
@@ -1223,6 +1251,48 @@ function ClientView({clientId}){
       return downloadBlob(new Blob([text],{type:"text/plain;charset=utf-8"}), finalName);
     }
     const segments = currentJob.originalSegments || null;
+    if(ext==="docx"){
+      const okapiPkg = await getOkapiPackage(meta);
+      if(okapiReady && okapiPkg?.packId){
+        if(!challengeRef.current) await refreshChallenge();
+        const translations = exactOkapiSentences();
+        const sendMerge = async () => {
+          const r = await fetch("/api/okapi/merge", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              packId: okapiPkg.packId,
+              translations: translations || undefined,
+              fullText: text,
+              ...botFields()
+            })
+          });
+          if(!r.ok){
+            const data = await r.json().catch(()=>({}));
+            throw new Error(data.error||"Request failed");
+          }
+          return await r.blob();
+        };
+        try{
+          let blob;
+          try{
+            blob = await sendMerge();
+          }catch(first){
+            const msg=String(first.message||"");
+            if(/Verification expired|Confirm you are human/i.test(msg)){
+              await refreshChallenge();
+              blob = await sendMerge();
+            }else throw first;
+          }
+          setDownloadNote("Downloaded with Okapi — original Word layout preserved.");
+          refreshChallenge();
+          return downloadBlob(blob, finalName);
+        }catch(okErr){
+          console.warn("Okapi merge failed:", okErr);
+          throw okErr;
+        }
+      }
+    }
     const fileB64 = await getSourceFileB64(meta);
     if(!fileB64) throw new Error("Original file is unavailable. Open the link from your email and try again.");
     if(ext==="docx"){
