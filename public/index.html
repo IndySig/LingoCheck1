@@ -716,8 +716,9 @@ function ClientView({clientId}){
     let cancelled=false;
     async function restore(){
       const params=new URLSearchParams(location.search);
-      const jobId=params.get("job");
-      const token=params.get("t")||params.get("token");
+      const pathDelivery=location.pathname.match(/^\/d\/([A-Za-z0-9_-]{6,64})\/([a-f0-9]{32,128})$/);
+      const jobId=pathDelivery?pathDelivery[1]:params.get("job");
+      const token=pathDelivery?pathDelivery[2]:(params.get("t")||params.get("token"));
       try{
         if(jobId && token && /^[A-Za-z0-9_-]{6,64}$/.test(jobId)){
           deliveryTokenRef.current=token;
@@ -733,15 +734,16 @@ function ClientView({clientId}){
         if(saved?.id){
           const job=await apiFetch("/api/jobs/"+encodeURIComponent(saved.id)+"?clientId="+encodeURIComponent(clientId));
           if(cancelled||!job) return;
-          // Don't restore completed jobs on page reload — client has already seen it
-          if(job.status==="complete"){
-            try{ localStorage.removeItem("lc_open_job"); }catch{}
-            return;
-          }
           setCurrentJob(job);
-          setStage("sent");
+          setStage(job.status==="complete"?"complete":"sent");
         }
-      }catch{}
+      }catch(e){
+        if(jobId && token && !cancelled){
+          setError(e.message==="Job not found"
+            ?"This download link is no longer valid. Ask the reviewer to send the translation again."
+            :(e.message||"Could not open the translation."));
+        }
+      }
     }
     restore();
     return()=>{cancelled=true;};

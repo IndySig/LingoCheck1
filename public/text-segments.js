@@ -224,6 +224,7 @@
       const num = text.slice(0, punctIndex).match(/(\d+)$/);
       const digits = num ? num[1].length : 0;
       if (digits >= 3 && /^\.\s+[A-Z\u00C0-\u024F]/.test(after)) return false;
+      if (/(?:\d{1,2}[:.])\d{2}$/.test(text.slice(0, punctIndex)) && /^\.\s+[A-Z\u00C0-\u024F]/.test(after)) return false;
       if (/^\.\s+[A-Za-z\u00C0-\u024F]/.test(after)) return true;
     }
     if (isAbbreviationBeforePeriod(text, punctIndex)) return true;

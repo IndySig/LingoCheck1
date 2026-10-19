@@ -26,6 +26,15 @@ test('a model number with a period stays on the first sentence', () => {
   assert.equal(parts[1], 'Lees deze handleiding zorgvuldig door voor gebruik.');
 });
 
+test('a clock time stays on its sentence and the next sentence follows', () => {
+  const parts = TS.splitSegmentIntoSentences(
+    'The afternoon starts at 14:00. Bring an apron and a container with a lid if you might want to take some soup home.'
+  );
+  assert.equal(parts.length, 2);
+  assert.equal(parts[0], 'The afternoon starts at 14:00.');
+  assert.equal(parts[1], 'Bring an apron and a container with a lid if you might want to take some soup home.');
+});
+
 test('numbered steps still split before the number', () => {
   const parts = TS.splitSegmentIntoSentences('Do this first. 1. Turn the device on. 2. Fill the tank.');
   assert.equal(parts[0], 'Do this first.');
