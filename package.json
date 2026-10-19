@@ -7,9 +7,13 @@
     "start": "node ./scripts/ensure-okapi.js && node server.js",
     "build": "node ./scripts/setup-okapi-auto.js",
     "setup:okapi": "node ./scripts/setup-okapi-auto.js",
-    "smoke:okapi": "node ./scripts/smoke-okapi.js"
+    "smoke:okapi": "node ./scripts/smoke-okapi.js",
+    "test": "node --test"
   },
-  "dependencies": {},
+  "dependencies": {
+    "diff": "^5.2.2",
+    "diff-match-patch": "^1.0.5"
+  },
   "engines": {
     "node": ">=18.0.0"
   }

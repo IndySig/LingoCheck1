@@ -181,6 +181,10 @@ async function fileToArrayBuffer(file){
   return new Promise((resolve,reject)=>{const r=new FileReader();r.onload=()=>resolve(r.result);r.onerror=reject;r.readAsArrayBuffer(file);});
 }
 
+function readAsText(file){
+  return new Promise((resolve,reject)=>{const r=new FileReader();r.onload=()=>resolve(String(r.result||""));r.onerror=()=>reject(new Error("Could not read file."));r.readAsText(file);});
+}
+
 function arrayBufferToBase64(buf){
   const bytes = new Uint8Array(buf);
   let binary = "";
@@ -596,6 +600,10 @@ function ClientView({clientId}){
   const[fileScan,setFileScan]=useState(null); // {name, fit, reason}
   const[fileBusy,setFileBusy]=useState(false);
   const[sourceFile,setSourceFile]=useState(null); // {name, ext, fileB64?}
+  const[qaSourceText,setQaSourceText]=useState("");
+  const[qaSourceName,setQaSourceName]=useState("");
+  const[qaSourceScan,setQaSourceScan]=useState(null);
+  const[qaSourceBusy,setQaSourceBusy]=useState(false);
   const[isWide,setIsWide]=useState(()=>window.matchMedia && window.matchMedia("(min-width: 980px)").matches);
   const isCompact=!useMedia("(min-width: 768px)");
   const pagePad=isCompact?"28px 18px 0":"40px 28px 0";
@@ -614,6 +622,8 @@ function ClientView({clientId}){
   });
   const[okapiReady,setOkapiReady]=useState(false);
   const fileRef=useRef();
+  const qaSourceRef=useRef();
+  const qaSourceSegmentsRef=useRef([]);
   const sourceFileB64Ref=useRef(null);
   const textSegmentsRef=useRef([]);
   const sentencePackRef=useRef(null);
@@ -845,13 +855,21 @@ function ClientView({clientId}){
       const ext = sourceFile?.ext || "txt";
       const name = sourceFile?.name || `translation.${ext}`;
       const qaOnly = extra.qaOnly === true || useOwnAi;
+      if(qaOnly && !qaSourceText.trim()){
+        setError("Upload the English source file before sending.");
+        return;
+      }
       const pack = qaOnly ? null : (sentencePackRef.current || buildSentencePackFromInput());
+      const sourceSegments = qaSourceSegmentsRef.current.length
+        ? qaSourceSegmentsRef.current
+        : qaSourceText.trim().split(/\n{2,}/).map(s => s.trim()).filter(Boolean);
       const j=await apiFetch("/api/jobs",{method:"POST",body:JSON.stringify({
         clientId,
         clientEmail: email,
-        originalText: qaOnly ? "" : (textSegmentsRef.current.length ? textSegmentsRef.current.join("\n\n") : inputText.trim()),
+        originalText: qaOnly ? qaSourceText.trim() : (textSegmentsRef.current.length ? textSegmentsRef.current.join("\n\n") : inputText.trim()),
+        customerTranslation: qaOnly ? inputText.trim() : null,
         originalSegments: qaOnly
-          ? null
+          ? sourceSegments
           : (window.LcTextSegments
             ? LcTextSegments.normalizeDocumentSegments(
                 (textSegmentsRef.current && textSegmentsRef.current.length)
@@ -892,10 +910,12 @@ function ClientView({clientId}){
 
   async function handleCheck(){
     if(!inputText.trim()){setError("Please paste or upload the translation first.");return;}
+    if(!qaSourceText.trim()){setError("Upload the English source file so we can check the translation against it.");return;}
     setError("");setStage("checking");setQaFindings(null);
     try{
       const payload=()=>({
         text: inputText.trim(),
+        sourceText: qaSourceText.trim(),
         language,
         ...botFields()
       });
@@ -919,11 +939,13 @@ function ClientView({clientId}){
 
   function handleReset(){
     setStage("idle");setInputText("");setAiResult("");setCurrentJob(null);setError("");setSourceFile(null);setFileScan(null);setUseOwnAi(true);setShowFullDraft(false);setQaFindings(null);
-    sourceFileB64Ref.current=null;textSegmentsRef.current=[];sentencePackRef.current=null;okapiPackageRef.current=null;
+    setQaSourceText("");setQaSourceName("");setQaSourceScan(null);
+    sourceFileB64Ref.current=null;textSegmentsRef.current=[];sentencePackRef.current=null;okapiPackageRef.current=null;qaSourceSegmentsRef.current=[];
     deliveryTokenRef.current="";
     try{ localStorage.removeItem("lc_open_job"); }catch{}
     if(location.search) history.replaceState({}, "", location.pathname);
     if(fileRef.current) fileRef.current.value="";
+    if(qaSourceRef.current) qaSourceRef.current.value="";
   }
 
   function onToggleFullTranslate(ev){
@@ -935,10 +957,13 @@ function ClientView({clientId}){
     setError("");
     setFileScan(null);
     setSourceFile(null);
+    setQaSourceText("");setQaSourceName("");setQaSourceScan(null);
     sourceFileB64Ref.current=null;
+    qaSourceSegmentsRef.current=[];
     textSegmentsRef.current=[];
     sentencePackRef.current=null;
     if(fileRef.current) fileRef.current.value="";
+    if(qaSourceRef.current) qaSourceRef.current.value="";
   }
 
   function applyExtractedText(raw, segments, file, sourceExt, baseReason, extras){
@@ -990,110 +1015,153 @@ function ClientView({clientId}){
     });
   }
 
+  async function inspectUpload(file){
+    const name=(file.name||"").toLowerCase();
+    const DX = window.LcDocExtract;
+    if(!DX) throw new Error("Document parser not loaded");
+    if(name.endsWith(".txt")||name.endsWith(".md")){
+      const raw = await readAsText(file);
+      const parsed = DX.extractPlainText(raw);
+      return { fit:true, ext:name.endsWith(".md")?"md":"txt", text:parsed.text, segments:parsed.segments, reason:"Text file" };
+    }
+    if(!(name.endsWith(".pdf")||name.endsWith(".docx"))){
+      throw new Error("Unsupported file type. Upload .txt, .md, .docx, or .pdf.");
+    }
+    const buf = await fileToArrayBuffer(file);
+    const fileB64 = arrayBufferToBase64(buf);
+    if(name.endsWith(".pdf")){
+      const r = await DX.extractPdfText(buf);
+      if(r.isScannedLike || !r.text){
+        return { fit:false, reason:"PDF has no usable text layer (likely scanned)." };
+      }
+      return {
+        fit:true,
+        ext:"pdf",
+        text:r.text,
+        segments:r.segments,
+        reason: r.hasImages ? "Text extracted; images will be kept on download." : "PDF text extracted",
+        fileB64
+      };
+    }
+    if(okapiReady){
+      try{
+        if(!challengeRef.current) await refreshChallenge();
+        const payload=()=>({
+          fileB64,
+          fileName: file.name,
+          language,
+          ...botFields()
+        });
+        let data;
+        try{
+          data=await apiFetch("/api/okapi/extract",{method:"POST",body:JSON.stringify(payload())});
+        }catch(first){
+          const msg=String(first.message||"");
+          if(/Verification expired|Confirm you are human/i.test(msg)){
+            await refreshChallenge();
+            data=await apiFetch("/api/okapi/extract",{method:"POST",body:JSON.stringify(payload())});
+          }else throw first;
+        }
+        if(data && data.text && Array.isArray(data.sentences) && data.sentences.length){
+          refreshChallenge();
+          return {
+            fit:true,
+            ext:"docx",
+            text:data.text,
+            segments:data.segments || data.sentences,
+            reason:"Word extracted with Okapi (layout-preserving round-trip)",
+            fileB64,
+            okapi:data.okapi,
+            sentences:data.sentences,
+            sentenceParaMap:data.sentenceParaMap,
+            fromOkapi:true
+          };
+        }
+      }catch(okErr){
+        console.warn("Okapi extract failed, falling back to browser parser:", okErr);
+      }
+    }
+    const r = await DX.extractDocxText(buf);
+    if(r.blocked) return { fit:false, reason:"Word document contains macros or executable content." };
+    if(!r.text) return { fit:false, reason:"Word document has no extractable text." };
+    return {
+      fit:true,
+      ext:"docx",
+      text:r.text,
+      segments:r.segments,
+      reason:(r.hasImages||r.hasDrawing) ? "Text extracted; images will be kept on download." : "Word text extracted",
+      fileB64
+    };
+  }
+
   async function handleFile(e){
     const file=e.target.files[0];if(!file)return;
     setError("");setFileScan(null);setSourceFile(null);sourceFileB64Ref.current=null;textSegmentsRef.current=[];sentencePackRef.current=null;okapiPackageRef.current=null;
-    const name=(file.name||"").toLowerCase();
-    const max=10*1024*1024;
-    if(file.size>max){setError("File too large (max 10 MB).");return;}
+    if(file.size>25*1024*1024){setError("File too large (max 25 MB).");return;}
     setFileBusy(true);
     try{
-      const DX = window.LcDocExtract;
-      if(!DX) throw new Error("Document parser not loaded");
-      if(name.endsWith(".txt")||name.endsWith(".md")){
-        const reader=new FileReader();
-        reader.onload=ev=>{
-          const raw=String(ev.target.result||"");
-          const parsed=DX.extractPlainText(raw);
-          applyExtractedText(parsed.text, parsed.segments, file, name.endsWith(".md")?"md":"txt", "Text file");
-          setFileBusy(false);
-        };
-        reader.onerror=()=>{setError("Could not read file.");setFileBusy(false);};
-        reader.readAsText(file);
+      const result = await inspectUpload(file);
+      if(!result.fit){
+        setFileScan({name:file.name,fit:false,reason:result.reason});
+        setInputText("");
         return;
       }
-      if(name.endsWith(".pdf")){
-        const buf = await fileToArrayBuffer(file);
-        const r=await DX.extractPdfText(buf);
-        if(r.isScannedLike || !r.text){
-          setFileScan({name:file.name,fit:false,reason:"PDF has no usable text layer (likely scanned)."});
-          setInputText("");
-          return;
-        }
-        const reason = r.hasImages
-          ? "Text extracted; images will be kept on download."
-          : "PDF text extracted";
-        applyExtractedText(r.text, r.segments, file, "pdf", reason);
-        const fileB64=arrayBufferToBase64(buf);
-        sourceFileB64Ref.current=fileB64;
-        setSourceFile(prev=>({...prev, fileB64}));
-        return;
+      applyExtractedText(result.text, result.segments, file, result.ext, result.reason, {
+        sentences: result.sentences,
+        sentenceParaMap: result.sentenceParaMap,
+        okapi: result.okapi,
+        fromOkapi: result.fromOkapi
+      });
+      if(result.fileB64){
+        sourceFileB64Ref.current=result.fileB64;
+        setSourceFile(prev=>({...(prev||{}), fileB64:result.fileB64, okapi:result.okapi||prev?.okapi}));
       }
-      if(name.endsWith(".docx")){
-        const buf = await fileToArrayBuffer(file);
-        const fileB64=arrayBufferToBase64(buf);
-        sourceFileB64Ref.current=fileB64;
-        let usedOkapi=false;
-        if(okapiReady){
-          try{
-            if(!challengeRef.current) await refreshChallenge();
-            const payload=()=>({
-              fileB64,
-              fileName: file.name,
-              language,
-              ...botFields()
-            });
-            let data;
-            try{
-              data=await apiFetch("/api/okapi/extract",{method:"POST",body:JSON.stringify(payload())});
-            }catch(first){
-              const msg=String(first.message||"");
-              if(/Verification expired|Confirm you are human/i.test(msg)){
-                await refreshChallenge();
-                data=await apiFetch("/api/okapi/extract",{method:"POST",body:JSON.stringify(payload())});
-              }else throw first;
-            }
-            if(data && data.text && Array.isArray(data.sentences) && data.sentences.length){
-              applyExtractedText(data.text, data.segments || data.sentences, file, "docx",
-                "Word extracted with Okapi (layout-preserving round-trip)", {
-                  sentences: data.sentences,
-                  sentenceParaMap: data.sentenceParaMap,
-                  okapi: data.okapi,
-                  fromOkapi: true
-                });
-              setSourceFile(prev=>({...prev, fileB64, okapi: data.okapi}));
-              usedOkapi=true;
-              refreshChallenge();
-            }
-          }catch(okErr){
-            console.warn("Okapi extract failed, falling back to browser parser:", okErr);
-          }
-        }
-        if(!usedOkapi){
-          const r=await DX.extractDocxText(buf);
-          if(r.blocked){
-            setFileScan({name:file.name,fit:false,reason:"Word document contains macros or executable content."});
-            setInputText("");
-            return;
-          }
-          if(!r.text){
-            setFileScan({name:file.name,fit:false,reason:"Word document has no extractable text."});
-            setInputText("");
-            return;
-          }
-          const reason = (r.hasImages||r.hasDrawing)
-            ? "Text extracted; images will be kept on download."
-            : "Word text extracted";
-          applyExtractedText(r.text, r.segments, file, "docx", reason);
-          setSourceFile(prev=>({...prev, fileB64}));
-        }
-        return;
-      }
-      setError("Unsupported file type. Upload .txt, .md, .docx, or .pdf.");
     }catch(err){
       setError("Could not process file: "+(err.message||"Unknown error"));
     }finally{
       setFileBusy(false);
+    }
+  }
+
+  async function handleQaSource(e){
+    const file=e.target.files[0];if(!file)return;
+    setError("");setQaSourceScan(null);setQaSourceText("");setQaSourceName("");
+    qaSourceSegmentsRef.current=[];
+    if(file.size>25*1024*1024){setError("File too large (max 25 MB).");return;}
+    setQaSourceBusy(true);
+    try{
+      const result = await inspectUpload(file);
+      if(!result.fit){
+        setQaSourceScan({name:file.name,fit:false,reason:result.reason});
+        return;
+      }
+      const DX = window.LcDocExtract;
+      const TS = window.LcTextSegments;
+      let segs;
+      if(result.fromOkapi && Array.isArray(result.segments) && result.segments.length){
+        segs = result.segments.map(function(s){ return String(s||"").trim(); }).filter(Boolean);
+      } else if(TS){
+        segs = TS.normalizeDocumentSegments((Array.isArray(result.segments) && result.segments.length) ? result.segments : result.text);
+      } else {
+        segs = String(result.text||"").split(/\n{2,}/).map(s => s.trim()).filter(Boolean);
+      }
+      const joined = result.fromOkapi
+        ? segs.join("\n\n")
+        : (TS ? TS.segmentsToDisplayText(segs) : segs.join("\n\n"));
+      const text = DX ? DX.truncateExtractedText(joined) : String(result.text||"").slice(0, 25000);
+      const truncated = String(result.text||"").length > text.length;
+      qaSourceSegmentsRef.current = segs;
+      setQaSourceText(text);
+      setQaSourceName(file.name);
+      setQaSourceScan({
+        name:file.name,
+        fit:true,
+        reason: truncated ? "English source extracted (truncated to 25,000 characters)" : "English source extracted"
+      });
+    }catch(err){
+      setError("Could not read the source file: "+(err.message||"Unknown error"));
+    }finally{
+      setQaSourceBusy(false);
     }
   }
 
@@ -1126,28 +1194,20 @@ function ClientView({clientId}){
     return null;
   }
 
-  function translationSentencesForMerge(text){
+  function exactOkapiSentences(){
     const expected = (okapiPackageRef.current && okapiPackageRef.current.sentenceCount)
       || (sentencePackRef.current && sentencePackRef.current.sentences && sentencePackRef.current.sentences.length)
       || 0;
-    if(
-      currentJob &&
-      Array.isArray(currentJob.translationSentences) &&
-      currentJob.translationSentences.length &&
-      (!expected || currentJob.translationSentences.length === expected)
-    ){
-      return currentJob.translationSentences;
-    }
+    const stored = currentJob && Array.isArray(currentJob.translationSentences) ? currentJob.translationSentences : null;
+    if(stored && stored.length && (!expected || stored.length === expected)) return stored;
     const pack = sentencePackRef.current;
-    if(pack?.fromOkapi && Array.isArray(pack.translationSentences) && pack.translationSentences.length){
+    if(
+      pack?.fromOkapi &&
+      Array.isArray(pack.translationSentences) &&
+      pack.translationSentences.length &&
+      (!expected || pack.translationSentences.length === expected)
+    ){
       return pack.translationSentences;
-    }
-    const sourceSentences = (pack?.fromOkapi && pack.sentences)
-      || (currentJob && currentJob.sourceSentences)
-      || null;
-    if(Array.isArray(sourceSentences) && sourceSentences.length){
-      const weights = sourceSentences.map(function(s){ return Math.max(1, String(s).replace(/\s+/g,"").length); });
-      return splitTextByWeights(String(text||"").replace(/\n+/g," "), weights);
     }
     return null;
   }
@@ -1170,14 +1230,12 @@ function ClientView({clientId}){
       if(okapiReady && okapiPkg?.xliffB64){
         try{
           if(!challengeRef.current) await refreshChallenge();
-          const translations = translationSentencesForMerge(text);
-          if(!translations || !translations.length){
-            throw new Error("Missing Okapi sentence translations");
-          }
+          const translations = exactOkapiSentences();
           const payload=()=>({
             fileB64,
             okapi: okapiPkg,
-            translations,
+            translations: translations || undefined,
+            fullText: text,
             ...botFields()
           });
           let data;
@@ -1247,8 +1305,8 @@ function ClientView({clientId}){
   const howItWorks=(()=>{
     const steps=useOwnAi
       ?[
-        ["1","Upload","Paste your AI translation or a file"],
-        ["2","AI check","We scan for mistakes and hallucinations"],
+        ["1","Upload","Paste your translation and upload the English source"],
+        ["2","AI check","We correct it against the source and mark every change"],
         ["3","Human touch","A certified translator reads every word"],
         ["4","Delivered","Download the corrected file"]
       ]
@@ -1311,7 +1369,7 @@ function ClientView({clientId}){
         ),
         e("p",{style:{...st.muted,maxWidth:560,margin:0,fontSize:isCompact?15:16}},
           useOwnAi
-            ?"Paste the AI translation you already have. We look for mistakes and hallucinations — then a real person proofreads every word."
+            ?"Paste the translation you already have and upload the English source. We check it against the original, then a real person proofreads every change."
             :"Need a full translation from English? Our AI drafts it, then a human revisor makes it sound right."
         )
       ),
@@ -1334,7 +1392,7 @@ function ClientView({clientId}){
             e("span",{style:{fontSize:12,fontWeight:600,color:C.accent,background:C.lilac,padding:"5px 12px",borderRadius:999}},useOwnAi?"Quality check":"Full translation")
           ),
           useOwnAi
-            ?e("div",{style:{background:"rgba(255,255,255,0.55)",border:`1px solid ${C.border}`,borderRadius:16,padding:"12px 14px",marginBottom:16,fontSize:13,color:C.muted,lineHeight:1.55}},"Paste or upload what you already have. AI scans first — then a certified translator proofreads.")
+            ?e("div",{style:{background:"rgba(255,255,255,0.55)",border:`1px solid ${C.border}`,borderRadius:16,padding:"12px 14px",marginBottom:16,fontSize:13,color:C.muted,lineHeight:1.55}},"Paste or upload the translation, then upload the English source it was made from. AI checks it against that source before a translator proofreads.")
             :e("div",{style:{background:"rgba(255,255,255,0.55)",border:`1px solid ${C.border}`,borderRadius:16,padding:"12px 14px",marginBottom:16,fontSize:13,color:C.muted,lineHeight:1.55}},"Paste English source text. We’ll draft a translation, then a revisor will refine it."),
           useOwnAi
             ?e("div",{style:{display:"flex",alignItems:"center",gap:10,marginBottom:16}},
@@ -1357,11 +1415,24 @@ function ClientView({clientId}){
           e("div",{style:{display:"flex",alignItems:isCompact?"stretch":"center",gap:10,marginBottom:18,flexDirection:isCompact?"column":"row",flexWrap:"wrap"}},
             e("input",{ref:fileRef,type:"file",accept:".txt,.md,.pdf,.docx",style:{display:"none"},onChange:handleFile}),
             e("button",{disabled:fileBusy,onClick:()=>fileRef.current.click(),style:{...st.btn,background:"rgba(255,255,255,0.7)",border:`1px solid ${C.border}`,color:C.muted,padding:"9px 16px",fontSize:13,width:isCompact?"100%":"auto"}},fileBusy?"Scanning…":"Upload file"),
-            e("span",{style:{fontSize:12,color:C.muted,lineHeight:1.45}},".txt, .docx, .pdf · max 10 MB")
+            e("span",{style:{fontSize:12,color:C.muted,lineHeight:1.45}},".txt, .docx, .pdf · max 25 MB")
           ),
           fileScan&&e("div",{style:{fontSize:13,marginBottom:12,color:fileScan.fit?C.green:C.error,background:fileScan.fit?C.greenBg:"#fdf2f2",border:`1px solid ${fileScan.fit?C.greenBorder:"rgba(196,61,61,0.22)"}`,borderRadius:14,padding:"10px 12px"}},
             e("div",{style:{fontWeight:600,marginBottom:4}},fileScan.fit?(useOwnAi?"File is fit for review":"File is fit for translation"):(useOwnAi?"File is not fit for review":"File is not fit for translation")),
             e("div",{style:{opacity:0.9}},fileScan.name," — ",fileScan.reason)
+          ),
+          useOwnAi&&e("div",{style:{marginBottom:18}},
+            e("label",{style:{...st.label,marginBottom:8}},"English source file"),
+            e("div",{style:{fontSize:12,color:C.muted,lineHeight:1.5,marginBottom:10}},"Required. This is the original English document, so we can see whether the translation changed the meaning."),
+            e("input",{ref:qaSourceRef,type:"file",accept:".txt,.md,.pdf,.docx",style:{display:"none"},onChange:handleQaSource}),
+            e("div",{style:{display:"flex",alignItems:isCompact?"stretch":"center",gap:10,flexDirection:isCompact?"column":"row",flexWrap:"wrap"}},
+              e("button",{type:"button",disabled:qaSourceBusy,onClick:()=>qaSourceRef.current&&qaSourceRef.current.click(),style:{...st.btn,background:"rgba(255,255,255,0.7)",border:`1px solid ${C.border}`,color:C.text,padding:"9px 16px",fontSize:13,width:isCompact?"100%":"auto"}},qaSourceBusy?"Reading source…":(qaSourceName?"Replace source file":"Upload source file")),
+              e("span",{style:{fontSize:12,color:C.muted,lineHeight:1.45}},".txt, .docx, .pdf · max 25 MB")
+            ),
+            qaSourceScan&&e("div",{style:{fontSize:13,marginTop:12,color:qaSourceScan.fit?C.green:C.error,background:qaSourceScan.fit?C.greenBg:"#fdf2f2",border:`1px solid ${qaSourceScan.fit?C.greenBorder:"rgba(196,61,61,0.22)"}`,borderRadius:14,padding:"10px 12px"}},
+              e("div",{style:{fontWeight:600,marginBottom:4}},qaSourceScan.fit?"Source file is ready":"Source file is not usable"),
+              e("div",{style:{opacity:0.9}},qaSourceScan.name," — ",qaSourceScan.reason)
+            )
           ),
           e("label",{style:{...st.label,marginBottom:8}},"Email for delivery"),
           e("input",{type:"email",autoComplete:"email",placeholder:"you@example.com",value:clientEmail,onChange:ev=>setClientEmail(ev.target.value),style:{...st.ta,minHeight:0,resize:"none",marginBottom:8,padding:"12px 16px"}}),
@@ -1369,7 +1440,7 @@ function ClientView({clientId}){
           e("input",{id:"lc_hp_fax",className:"hp",tabIndex:-1,autoComplete:"off",name:"lc_hp_fax",defaultValue:""}),
           e("div",{ref:turnstileRef,style:{marginBottom:turnstileSiteKey?14:0,minHeight:turnstileSiteKey?65:0}}),
           error&&e("div",{style:{fontSize:13,color:C.error,marginBottom:12}},error),
-          e("button",{className:"primary",disabled:!!(fileScan&&fileScan.fit===false)||fileBusy,onClick:useOwnAi?handleCheck:handleTranslate,style:{...st.btn,width:"100%",padding:"16px 18px",background:C.accent,fontSize:16,color:C.white}},
+          e("button",{className:"primary",disabled:!!(fileScan&&fileScan.fit===false)||!!(useOwnAi&&qaSourceScan&&qaSourceScan.fit===false)||fileBusy||qaSourceBusy,onClick:useOwnAi?handleCheck:handleTranslate,style:{...st.btn,width:"100%",padding:"16px 18px",background:C.accent,fontSize:16,color:C.white}},
             (fileScan&&fileScan.fit===false)?(useOwnAi?"File not suitable":"File not translatable"):(useOwnAi?"Check with LingoCheck":"Translate with LingoCheck")
           )
         )
@@ -1386,8 +1457,8 @@ function ClientView({clientId}){
 
     stage==="checking"&&e("div",{style:{...cardStyle(),textAlign:"center",padding:isCompact?"48px 20px":"64px 32px",animation:"fadeUp 0.25s ease"}},
       e("div",{style:{marginBottom:20}},e(Spinner,{size:26})),
-      e("div",{className:"lc-display",style:{fontSize:24,color:C.text,marginBottom:8}},"Checking for hallucinations…"),
-      e("div",{style:st.muted},"Our AI is scanning your translation before a human revisor sees it")
+      e("div",{className:"lc-display",style:{fontSize:24,color:C.text,marginBottom:8}},"Checking against the source…"),
+      e("div",{style:st.muted},"Our AI is comparing the translation with the English source")
     ),
 
     stage==="checked"&&e("div",{style:{animation:"fadeUp 0.25s ease"}},
@@ -1416,17 +1487,12 @@ function ClientView({clientId}){
           e("div",{style:{fontFamily:"inherit",fontSize:isWide?22:18,fontWeight:600,color:C.green,lineHeight:1.3}},"Save ",formatEuro(savings)," with LingoCheck!"),
           e("div",{style:{fontSize:11,color:C.muted,marginTop:4}},"Versus the typical agency rate for this job")
         ),
-        qaFindings&&e("div",{style:{background:C.amberBg,border:`1px solid ${C.amberBorder}`,borderRadius:10,padding:"12px 16px",marginBottom:16}},
-          e("div",{style:{fontSize:12,fontWeight:600,color:C.amber,marginBottom:6}},"AI check summary"),
-          e("div",{style:{fontSize:12,color:C.amber,lineHeight:1.55}},qaFindings.summary||"AI quality check complete."),
-          Array.isArray(qaFindings.issues)&&qaFindings.issues.length>0&&e("ul",{style:{margin:"10px 0 0",paddingLeft:18,fontSize:12,color:C.amber,lineHeight:1.55}},
-            qaFindings.issues.map((issue,i)=>e("li",{key:i,style:{marginBottom:4}},
-              e("strong",{style:{textTransform:"uppercase",letterSpacing:"0.4px",fontSize:10}},issue.severity||"note"),
-              " — ",issue.detail
-            ))
-          )
+        e("div",{style:{background:C.soft,border:`1px solid ${C.border}`,borderRadius:10,padding:"12px 16px",marginBottom:16,fontSize:12,color:C.muted,lineHeight:1.55}},
+          (aiResult.trim() && aiResult.trim()!==inputText.trim())
+            ?"LingoCheck changed parts of this translation. The reviewer sees those changes highlighted, and can open your original wording from each highlight."
+            :"LingoCheck kept your wording. A reviewer will still proofread it against the English source.",
+          qaSourceName?e("div",{style:{marginTop:6}},"Source: ",qaSourceName):null
         ),
-        e("div",{style:{background:C.soft,border:`1px solid ${C.border}`,borderRadius:10,padding:"12px 16px",marginBottom:16,fontSize:12,color:C.muted,lineHeight:1.55}},"Next, a certified translator will proofread the checked text. Approve below to send it for human review."),
         e("label",{style:{...st.label,marginBottom:8}},"Email for delivery"),
         e("input",{type:"email",autoComplete:"email",placeholder:"you@example.com",value:clientEmail,onChange:ev=>setClientEmail(ev.target.value),style:{...st.ta,minHeight:0,resize:"none",marginBottom:8,padding:"10px 14px"}}),
         e("div",{style:{fontSize:12,color:C.muted,marginBottom:16,lineHeight:1.5}},"We’ll send the reviewed file to this address when it’s ready."),
@@ -1544,6 +1610,16 @@ function ClientView({clientId}){
               ?"Your translation has been human-verified. We also emailed it to "+currentJob.clientEmailMasked+"."
               :"Your translation has been human-verified and is ready to use"
           )
+        )
+      ),
+      currentJob.qaFindings&&(currentJob.qaFindings.summary||(Array.isArray(currentJob.qaFindings.issues)&&currentJob.qaFindings.issues.length>0))&&e("div",{style:{background:C.amberBg,border:`1px solid ${C.amberBorder}`,borderRadius:14,padding:"14px 18px",marginBottom:18}},
+        e("div",{style:{fontSize:12,fontWeight:600,color:C.amber,marginBottom:6}},"AI check summary"),
+        currentJob.qaFindings.summary&&e("div",{style:{fontSize:13,color:C.text,lineHeight:1.6}},currentJob.qaFindings.summary),
+        Array.isArray(currentJob.qaFindings.issues)&&currentJob.qaFindings.issues.length>0&&e("ul",{style:{margin:"10px 0 0",paddingLeft:18,fontSize:12,color:C.muted,lineHeight:1.55}},
+          currentJob.qaFindings.issues.map((issue,i)=>e("li",{key:i,style:{marginBottom:4}},
+            e("strong",{style:{textTransform:"uppercase",letterSpacing:"0.4px",fontSize:10,color:C.amber}},issue.severity||"note"),
+            " — ",issue.detail
+          ))
         )
       ),
       e("div",{style:{...cardStyle(),border:`1px solid ${C.greenBorder}`,marginBottom:14}},

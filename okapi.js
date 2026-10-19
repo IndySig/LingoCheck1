@@ -197,6 +197,55 @@ function encodeXmlText(s) {
     .replace(/'/g, '&apos;');
 }
 
+/** Word stores a drawing's file name as its own trans-unit. That is not body text. */
+function isImageAssetText(text) {
+  const t = String(text || '').replace(/\s+/g, ' ').trim();
+  if (!t || t.length > 180) return false;
+  const withoutExt = t.replace(/\.(png|jpe?g|gif|bmp|tif|tiff|emf|wmf|svg|webp)$/i, '');
+  if (/[.!?]/.test(withoutExt)) return false;
+  return /^(?:picture\s+\d+[_ ].+|[\w .()\-]+\.(?:png|jpe?g|gif|bmp|tif|tiff|emf|wmf|svg|webp))$/i.test(t);
+}
+
+function stripImageAssets(text) {
+  const kept = String(text || '')
+    .split(/\n/)
+    .filter((line) => !isImageAssetText(line));
+  return kept
+    .join('\n')
+    .replace(
+      /(^|\s)Picture\s+\d+_[^\s]+\.(?:png|jpe?g|gif|bmp|tif|tiff|emf|wmf|svg|webp)(?=\s|$)/gi,
+      '$1'
+    )
+    .replace(/[ \t]{2,}/g, ' ')
+    .replace(/ *\n */g, '\n')
+    .trim();
+}
+
+function splitBySourceAnchors(fullText, sources) {
+  const raw = String(fullText || '').replace(/\s+/g, ' ').trim();
+  const normSources = sources.map((source) => String(source || '').replace(/\s+/g, ' ').trim());
+  if (!raw || normSources.length < 2) return null;
+  const found = [];
+  let cursor = 0;
+  const lower = raw.toLowerCase();
+  for (let i = 0; i < normSources.length; i++) {
+    const src = normSources[i];
+    if (src.length < 8) continue;
+    const at = lower.indexOf(src.toLowerCase(), cursor);
+    if (at < 0) continue;
+    found.push({ index: i, at });
+    cursor = at + src.length;
+  }
+  if (found.length < 2) return null;
+  const out = normSources.map(() => '');
+  found.forEach((hit, n) => {
+    const start = n === 0 ? 0 : hit.at;
+    const end = n + 1 < found.length ? found[n + 1].at : raw.length;
+    out[hit.index] = raw.slice(start, end).replace(/\s+/g, ' ').trim();
+  });
+  return out;
+}
+
 /** Strip XLIFF inline codes, keep human text. */
 function xliffInnerToPlain(inner) {
   let t = String(inner || '');
@@ -215,10 +264,208 @@ function extractMrkSegments(block) {
     const attrs = m[1] || '';
     if (!/\bmtype\s*=\s*["']seg["']/i.test(attrs)) continue;
     const mid = (attrs.match(/\bmid\s*=\s*["']([^"']*)["']/i) || [])[1] || String(out.length);
-    const text = xliffInnerToPlain(m[2]);
-    if (text) out.push({ mid, text });
+    const inner = m[2] || '';
+    const text = xliffInnerToPlain(inner);
+    if (text) out.push({ mid, text, inner });
   }
   return out;
+}
+
+function tokenizeInline(inner) {
+  const parts = [];
+  const source = String(inner || '');
+  const re = /<[^>]+>/g;
+  let last = 0;
+  let match;
+  while ((match = re.exec(source))) {
+    if (match.index > last) parts.push({ type: 'text', value: source.slice(last, match.index) });
+    parts.push({ type: 'tag', value: match[0] });
+    last = re.lastIndex;
+  }
+  if (last < source.length) parts.push({ type: 'text', value: source.slice(last) });
+  return parts;
+}
+
+function splitCharsByWeights(text, weights) {
+  const chars = Array.from(String(text || ''));
+  if (!weights.length) return [];
+  const total = weights.reduce((sum, n) => sum + n, 0) || 1;
+  const out = [];
+  let cursor = 0;
+  let consumed = 0;
+  for (let i = 0; i < weights.length; i++) {
+    consumed += weights[i];
+    const end = i === weights.length - 1
+      ? chars.length
+      : Math.max(cursor, Math.min(chars.length, Math.round(chars.length * (consumed / total))));
+    out.push(chars.slice(cursor, end).join(''));
+    cursor = end;
+  }
+  return out;
+}
+
+function splitWordsToCount(text, count) {
+  const words = String(text || '').trim().split(/\s+/).filter(Boolean);
+  const slots = Math.max(1, count | 0);
+  if (slots === 1) return [words.join(' ')];
+  const out = [];
+  let idx = 0;
+  for (let i = 0; i < slots; i++) {
+    const slotsLeft = slots - i;
+    const wordsLeft = words.length - idx;
+    const take = i === slots - 1
+      ? wordsLeft
+      : Math.max(0, Math.min(wordsLeft - Math.max(0, slotsLeft - 1), Math.round(wordsLeft / slotsLeft) || 0));
+    out.push(words.slice(idx, idx + take).join(' '));
+    idx += take;
+  }
+  return out;
+}
+
+/** Keep bold, breaks and other inline codes, and put the new wording in the same runs. */
+function fillInline(sourceInner, translated) {
+  const sourcePlain = xliffInnerToPlain(sourceInner);
+  const next = String(translated || '').replace(/\s+/g, ' ').trim();
+  if (!next) return '';
+  if (sourcePlain === next) return String(sourceInner || '');
+  const parts = tokenizeInline(sourceInner);
+  const textSlots = [];
+  parts.forEach((part, index) => {
+    if (part.type === 'text' && part.value.replace(/\s+/g, '').length) textSlots.push(index);
+  });
+  if (!textSlots.length) return encodeXmlText(next);
+  const weights = textSlots.map((index) => Math.max(1, parts[index].value.replace(/\s+/g, '').length));
+  const chunks = textSlots.length === 1 ? [next] : splitCharsByWeights(next, weights);
+  textSlots.forEach((index, n) => {
+    const original = parts[index].value;
+    const lead = /^\s/.test(original) ? (original.match(/^\s*/) || [''])[0] : '';
+    const trail = /\s$/.test(original) && n < textSlots.length - 1 ? (original.match(/\s*$/) || [''])[0] : '';
+    parts[index] = { type: 'text', value: `${lead}${chunks[n] || ''}${trail}` };
+  });
+  return parts.map((part) => (part.type === 'tag' ? part.value : encodeXmlText(part.value))).join('');
+}
+
+function wordSet(value) {
+  return new Set(String(value || '').toLowerCase().replace(/[^\p{L}\p{N}\s]+/gu, ' ').split(/\s+/).filter((word) => word.length > 2));
+}
+
+function textSimilarity(a, b) {
+  const left = wordSet(a);
+  const right = wordSet(b);
+  if (!left.size || !right.size) return 0;
+  let shared = 0;
+  for (const word of left) if (right.has(word)) shared += 1;
+  return shared / Math.max(left.size, right.size);
+}
+
+function splitBySourceWeights(text, sources) {
+  const words = String(text || '').trim().split(/\s+/).filter(Boolean);
+  if (!sources.length) return [];
+  if (sources.length === 1) return [words.join(' ')];
+  const weights = sources.map((source) => Math.max(1, String(source || '').replace(/\s+/g, '').length));
+  const total = weights.reduce((sum, n) => sum + n, 0) || 1;
+  const out = [];
+  let cursor = 0;
+  let consumed = 0;
+  for (let i = 0; i < weights.length; i++) {
+    consumed += weights[i];
+    const end = i === weights.length - 1
+      ? words.length
+      : Math.max(cursor, Math.min(words.length, Math.round(words.length * (consumed / total))));
+    out.push(words.slice(cursor, end).join(' '));
+    cursor = end;
+  }
+  return out;
+}
+
+function revisedChunks(fullText) {
+  const raw = String(fullText || '').trim();
+  if (!raw) return [];
+  const lines = raw.split(/\n+/).map((line) => line.trim()).filter(Boolean);
+  const chunks = [];
+  for (const line of lines.length ? lines : [raw]) {
+    const sentences = line.split(/(?<=[.!?])\s+/).map((part) => part.trim()).filter(Boolean);
+    if (sentences.length > 1) chunks.push(...sentences);
+    else chunks.push(line);
+  }
+  return chunks;
+}
+
+function alignChunksToSources(sources, chunks) {
+  const out = sources.map(() => []);
+  let j = 0;
+  for (let i = 0; i < sources.length && j < chunks.length; i++) {
+    let bestAt = i;
+    let bestSim = textSimilarity(sources[i], chunks[j]);
+    const lookUntil = Math.min(sources.length - 1, i + 3);
+    for (let k = i + 1; k <= lookUntil; k++) {
+      const sim = textSimilarity(sources[k], chunks[j]);
+      if (sim > bestSim + 0.12) {
+        bestSim = sim;
+        bestAt = k;
+      }
+    }
+    if (bestAt > i && bestSim >= 0.4) continue;
+    out[i].push(chunks[j]);
+    j += 1;
+    while (j < chunks.length && i < sources.length - 1) {
+      const here = textSimilarity(sources[i], chunks[j]);
+      const next = textSimilarity(sources[i + 1], chunks[j]);
+      if (next >= here && next >= 0.35) break;
+      if (here < 0.2 && next < 0.2) break;
+      out[i].push(chunks[j]);
+      j += 1;
+    }
+  }
+  if (j < chunks.length) out[out.length - 1].push(...chunks.slice(j));
+  return out.map((parts) => parts.join(' ').replace(/\s+/g, ' ').trim());
+}
+
+function alignRevisedToSourceSentences(sourceSentences, fullText) {
+  const sources = sourceSentences.map((sentence) => String(sentence || '').trim());
+  const raw = stripImageAssets(fullText);
+  if (!sources.length) return [];
+  if (!raw) return sources.map(() => '');
+  const doubles = raw.split(/\n{2,}/).map((part) => part.trim()).filter(Boolean);
+  const singles = raw.split(/\n+/).map((part) => part.trim()).filter(Boolean);
+  if (doubles.length === sources.length) return doubles;
+  if (singles.length === sources.length) return singles;
+  const anchored = splitBySourceAnchors(raw, sources);
+  if (anchored) return anchored;
+  const chunks = revisedChunks(raw);
+  if (chunks.length === sources.length) return chunks;
+  if (chunks.length < 2) return splitBySourceWeights(raw, sources);
+  return alignChunksToSources(sources, chunks);
+}
+
+function sentencesMatchFullText(sentences, fullText, paraMap) {
+  if (!Array.isArray(sentences) || !sentences.length || !String(fullText || '').trim()) return false;
+  const maxPi = Array.isArray(paraMap) && paraMap.length
+    ? Math.max(...paraMap.map((n) => Number(n) || 0))
+    : 0;
+  const buckets = Array.from({ length: maxPi + 1 }, () => []);
+  sentences.forEach((sentence, i) => {
+    const part = String(sentence || '').trim();
+    if (!part) return;
+    const pi = Array.isArray(paraMap) && paraMap[i] != null ? (Number(paraMap[i]) || 0) : 0;
+    buckets[pi].push(part);
+  });
+  const rebuilt = buckets.map((bucket) => bucket.join(' ')).filter(Boolean).join('\n\n');
+  const norm = (value) => String(value || '').replace(/\s+/g, ' ').trim();
+  return norm(rebuilt) === norm(fullText);
+}
+
+function resolveMergeTranslations(xliffXml, opts = {}) {
+  const parsed = parseXliff(xliffXml);
+  const expected = parsed.sentences.length;
+  const given = Array.isArray(opts.translations)
+    ? opts.translations.map((item) => String(item == null ? '' : item))
+    : [];
+  const fullText = opts.fullText == null ? '' : String(opts.fullText);
+  if (given.length === expected && expected > 0) return given;
+  if (fullText.trim() && parsed.sentences.length) return alignRevisedToSourceSentences(parsed.sentences, fullText);
+  if (given.length === expected && expected > 0) return given;
+  return null;
 }
 
 /**
@@ -245,6 +492,7 @@ function parseXliff(xliffXml) {
     const sentences = mrks.length
       ? mrks.map((s) => s.text)
       : [fullText];
+    if (sentences.length && sentences.every((sentence) => isImageAssetText(sentence))) continue;
 
     units.push({
       id,
@@ -304,6 +552,8 @@ function applyTranslationsToXliff(xliffXml, translations) {
     const mrks = extractMrkSegments(sourceInner);
     const fullText = xliffInnerToPlain(sourceInner);
     if (!fullText && !mrks.length) return full;
+    const unitSentences = mrks.length ? mrks.map((mk) => mk.text) : [fullText];
+    if (unitSentences.every((sentence) => isImageAssetText(sentence))) return full;
 
     const count = mrks.length || 1;
     const parts = [];
@@ -404,8 +654,9 @@ function mergeDocx(originalDocx, xliffXml, opts = {}) {
     fs.writeFileSync(inputPath, originalDocx);
 
     let xml = String(xliffXml || '');
-    if (Array.isArray(opts.translations) && opts.translations.length) {
-      xml = applyTranslationsToXliff(xml, opts.translations);
+    const translations = resolveMergeTranslations(xml, opts);
+    if (translations && translations.length) {
+      xml = applyTranslationsToXliff(xml, translations);
     }
     const xlfPath = path.join(workDir, `${baseName}.xlf`);
     fs.writeFileSync(xlfPath, xml, 'utf8');
@@ -445,6 +696,8 @@ module.exports = {
   languageToOkapiCode,
   parseXliff,
   applyTranslationsToXliff,
+  resolveMergeTranslations,
+  fillInline,
   extractDocx,
   mergeDocx
 };

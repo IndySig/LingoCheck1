@@ -31,7 +31,7 @@
   }
 
   function endsSentence(t) {
-    return /[.!?]["')\]]*$/.test(String(t || "").trim());
+    return /[.!?]["'\u201D\u2019)\]]*$/.test(String(t || "").trim());
   }
 
   function isFragmentLine(line) {
@@ -209,6 +209,7 @@
       "approx", "dept", "est", "vol", "no", "art", "sec", "fig", "ref", "p", "pp", "ed", "eds", "rev",
       "jan", "feb", "mar", "apr", "jun", "jul", "aug", "sep", "sept", "oct", "nov", "dec",
       "mon", "tue", "wed", "thu", "fri", "sat", "sun", "st", "ave", "blvd", "de", "van", "der", "po", "box",
+      "bijv", "bijvoorbeeld", "dwz", "enz", "evt", "ca", "nr", "blz", "dhr", "mw",
     ]);
     if (abbrevs.has(w)) return true;
     if (m[1].length === 1 && /[A-Za-z]/.test(m[1])) return true;
@@ -220,6 +221,9 @@
     if (/\d/.test(charBefore)) {
       const after = text.slice(punctIndex);
       if (/^\.\d/.test(after)) return true;
+      const num = text.slice(0, punctIndex).match(/(\d+)$/);
+      const digits = num ? num[1].length : 0;
+      if (digits >= 3 && /^\.\s+[A-Z\u00C0-\u024F]/.test(after)) return false;
       if (/^\.\s+[A-Za-z\u00C0-\u024F]/.test(after)) return true;
     }
     if (isAbbreviationBeforePeriod(text, punctIndex)) return true;
@@ -228,15 +232,17 @@
 
   function splitSegmentIntoSentencesInner(t) {
     const boundarySignals =
-      (t.match(/[.!?](?:\s|$)/g) || []).length +
+      (t.match(/[.!?]["'\u201D\u2019)\]]*(?:\s|$)/g) || []).length +
       (t.match(/;\s+/g) || []).length +
       (t.match(/:\s+[A-Z\u00C0-\u024F]/g) || []).length +
       (t.match(/\s[—–]\s/g) || []).length +
       (t.match(/\s+\d+[\.\)]\s+/g) || []).length;
+    const hasLowercaseSentence = /[.!?]["'\u201D\u2019)\]]*\s+[a-z\u00E0-\u00FF]/.test(t);
     if (
       t.length < 260 &&
       boundarySignals <= 1 &&
-      !/\.\s+[A-Z\u00C0-\u024F]/.test(t) &&
+      !hasLowercaseSentence &&
+      !/[.!?]["'\u201D\u2019)\]]*\s+[A-Z\u00C0-\u024F]/.test(t) &&
       !/;\s+[A-Z\u00C0-\u024F]/.test(t)
     ) {
       return [t];
@@ -249,12 +255,15 @@
     }
 
     let m;
-    const endRe = /([.!?]+(?:["')\]]*))(\s+)/g;
+    const endRe = /([.!?]+(?:["'\u201D\u2019)\]]*))(\s+)/g;
     while ((m = endRe.exec(t)) !== null) {
       if (shouldSkipPeriodSplit(t, m.index)) continue;
       const after = t.slice(m.index + m[0].length);
       if (!after) continue;
-      if (/^[a-z\u00E0-\u00FF]/.test(after) && !/^[a-z]\)/.test(after)) continue;
+      if (/^[a-z\u00E0-\u00FF]/.test(after) && !/^[a-z]\)/.test(after)) {
+        const left = t.slice(0, m.index).trim();
+        if (left.length < 24) continue;
+      }
       addBoundary(m.index + m[1].length, 1);
     }
 
@@ -285,6 +294,8 @@
 
     const embeddedListRe = /\s+(\d+[\.\)]\s+)/g;
     while ((m = embeddedListRe.exec(t)) !== null) {
+      const num = parseInt(m[1], 10);
+      if (!Number.isFinite(num) || num > 99) continue;
       if (t.slice(0, m.index).trim().length >= 8) addBoundary(m.index, 2);
     }
 
@@ -403,12 +414,29 @@
     return { sentences, paraMap, paragraphCount: normalized.length };
   }
 
+  function pairWholeSentences(sources, translations) {
+    const src = (sources || []).map((s) => String(s || "").trim()).filter(Boolean);
+    const trans = (translations || []).map((s) => String(s || "").trim()).filter(Boolean);
+    if (!src.length) return { sources: [], trans: [] };
+    if (!trans.length) return { sources: src, trans: src.map(() => "") };
+    if (trans.length === src.length) return { sources: src, trans };
+    if (trans.length > src.length) {
+      const out = trans.slice(0, src.length - 1);
+      out.push(trans.slice(src.length - 1).join(" "));
+      return { sources: src, trans: out };
+    }
+    const kept = src.slice(0, trans.length - 1);
+    kept.push(src.slice(trans.length - 1).join(" "));
+    return { sources: kept, trans: trans.slice(0, kept.length) };
+  }
+
   function alignSentenceTranslations(segments, translationText, storedTranslationSentences) {
     const normalized = normalizeDocumentSegments(segments);
     const sourceSentences = [];
     const paraMap = [];
     normalized.forEach((seg, pi) => {
-      splitSegmentIntoSentences(seg).forEach((s) => {
+      const parts = splitSegmentIntoSentences(seg);
+      (parts.length ? parts : [seg]).forEach((s) => {
         sourceSentences.push(s);
         paraMap.push(pi);
       });
@@ -426,57 +454,60 @@
       };
     }
 
-    const transSegments = [];
     const transText = String(translationText || "").trim();
     const transParts = normalizeDocumentSegments(transText);
-    if (transParts.length === normalized.length) {
-      transSegments.push(...transParts);
-    } else {
-      const weights = normalized.map((s) => Math.max(1, String(s).replace(/\s+/g, "").length));
-      const total = weights.reduce((a, b) => a + b, 0) || 1;
-      const words = transText.replace(/\n+/g, " ").split(/\s+/).filter(Boolean);
-      let idx = 0;
-      for (let i = 0; i < normalized.length; i++) {
-        const take =
-          i === normalized.length - 1
-            ? words.length - idx
-            : Math.max(0, Math.round(words.length * (weights[i] / total)));
-        transSegments.push(words.slice(idx, idx + take).join(" "));
-        idx += take;
-      }
+    const sentences = [];
+    const transSentences = [];
+    const map = [];
+
+    function pushPair(sources, translations, pi) {
+      const paired = pairWholeSentences(sources, translations);
+      paired.sources.forEach((s) => {
+        sentences.push(s);
+        map.push(pi);
+      });
+      transSentences.push(...paired.trans);
     }
 
-    const transSentences = [];
-    normalized.forEach((seg, pi) => {
-      const origSents = splitSegmentIntoSentences(seg);
-      const transSeg = transSegments[pi] || "";
-      let aligned = splitSegmentIntoSentences(transSeg);
-      if (aligned.length !== origSents.length) {
-        const segWeights = origSents.map((s) => Math.max(1, String(s).replace(/\s+/g, "").length));
-        const segWords = transSeg.replace(/\n+/g, " ").split(/\s+/).filter(Boolean);
-        const segTotal = segWeights.reduce((a, b) => a + b, 0) || 1;
-        aligned = [];
-        let wIdx = 0;
-        for (let i = 0; i < origSents.length; i++) {
-          const take =
-            i === origSents.length - 1
-              ? segWords.length - wIdx
-              : Math.max(0, Math.round(segWords.length * (segWeights[i] / segTotal)));
-          aligned.push(segWords.slice(wIdx, wIdx + take).join(" "));
-          wIdx += take;
-        }
+    if (transParts.length === normalized.length && normalized.length) {
+      const groups = normalized.map((seg, pi) => {
+        const orig = splitSegmentIntoSentences(seg);
+        const aligned = splitSegmentIntoSentences(transParts[pi] || "");
+        return {
+          pi,
+          orig: orig.length ? orig : [seg],
+          aligned: aligned.length ? aligned : [String(transParts[pi] || "")],
+        };
+      });
+      const srcCount = groups.reduce((n, g) => n + g.orig.length, 0);
+      const transCount = groups.reduce((n, g) => n + g.aligned.length, 0);
+      if (srcCount === transCount) {
+        sourceSentences.forEach((s, i) => {
+          sentences.push(s);
+          map.push(paraMap[i]);
+        });
+        transSentences.push(...groups.flatMap((g) => g.aligned));
+      } else {
+        groups.forEach((g) => pushPair(g.orig, g.aligned, g.pi));
       }
-      transSentences.push(...aligned);
-    });
-
-    while (transSentences.length < sourceSentences.length) transSentences.push("");
-    if (transSentences.length > sourceSentences.length) transSentences.length = sourceSentences.length;
+    } else {
+      const wholes = transParts.flatMap((part) => {
+        const split = splitSegmentIntoSentences(part);
+        return split.length ? split : [part];
+      });
+      const paired = pairWholeSentences(sourceSentences, wholes);
+      paired.sources.forEach((s, i) => {
+        sentences.push(s);
+        map.push(paraMap[Math.min(i, Math.max(0, paraMap.length - 1))] || 0);
+      });
+      transSentences.push(...paired.trans);
+    }
 
     return {
-      sentences: sourceSentences,
+      sentences,
       transSentences,
-      paraMap,
-      paragraphCount: normalized.length,
+      paraMap: map,
+      paragraphCount: normalized.length || 1,
     };
   }
 

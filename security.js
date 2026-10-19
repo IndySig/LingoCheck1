@@ -9,8 +9,9 @@ const ALLOWED_LANGUAGES = Object.freeze(['Dutch', 'Spanish', 'German']);
 const MAX_TEXT_CHARS = 25000;
 const MAX_CLIENT_ID_LEN = 64;
 const MAX_FILENAME_LEN = 180;
-const MAX_FILE_BYTES = 10 * 1024 * 1024;
-const MAX_DOCX_UNCOMPRESSED = 30 * 1024 * 1024;
+const MAX_FILE_MB = 25;
+const MAX_FILE_BYTES = MAX_FILE_MB * 1024 * 1024;
+const MAX_DOCX_UNCOMPRESSED = 75 * 1024 * 1024;
 const MAX_ZIP_ENTRIES = 200;
 const CHALLENGE_TTL_MS = 10 * 60 * 1000;
 const CHALLENGE_MIN_AGE_MS = 0;
@@ -248,6 +249,11 @@ function sanitizeSentenceList(list) {
   return out.length ? out : null;
 }
 
+function sanitizeSentenceStatus(list) {
+  if (!Array.isArray(list)) return [];
+  return list.slice(0, 600).map((item) => (item === 'checked' ? 'checked' : ''));
+}
+
 function rebuildTranslationFromSentences(sentences, paraMap) {
   if (!Array.isArray(sentences) || !sentences.length) return '';
   const maxPi = Array.isArray(paraMap) && paraMap.length
@@ -296,7 +302,7 @@ function publicJob(job) {
     language: job.language,
     aiTranslation: job.aiTranslation,
     qaOnly: !!job.qaOnly,
-    qaFindings: sanitizeQaFindings(job.qaFindings),
+    qaFindings: job.status === 'complete' ? sanitizeQaFindings(job.qaFindings) : null,
     status: job.status,
     revisedTranslation: job.revisedTranslation || null,
     createdAt: job.createdAt,
@@ -319,6 +325,12 @@ function revisorJob(job) {
   if (!base) return null;
   return {
     ...base,
+    customerTranslation: job.customerTranslation ? sanitizeText(job.customerTranslation) : null,
+    qaFindings: sanitizeQaFindings(job.qaFindings),
+    sentenceStatus: sanitizeSentenceStatus(job.sentenceStatus),
+    propagateSources: Array.isArray(job.propagateSources) ? job.propagateSources : null,
+    sentenceMeta: Array.isArray(job.sentenceMeta) ? job.sentenceMeta : [],
+    revisionHistory: Array.isArray(job.revisionHistory) ? job.revisionHistory.slice(-100) : [],
     sourceSentences: Array.isArray(job.sourceSentences) ? job.sourceSentences : null,
     translationSentences: Array.isArray(job.translationSentences) ? job.translationSentences : null,
     sentenceParaMap: Array.isArray(job.sentenceParaMap) ? job.sentenceParaMap : null,
@@ -524,8 +536,11 @@ function buildClientJob(body, pricing = {}) {
   const sourceSentences = sanitizeSentenceList(body.sourceSentences);
   const translationSentences = sanitizeSentenceList(body.translationSentences);
   const sentenceParaMap = sanitizeParaMap(body.sentenceParaMap, sourceSentences?.length);
-  const aiTranslation = sanitizeText(body.aiTranslation || (qaOnly ? body.originalText : ''));
+  const aiTranslation = sanitizeText(body.aiTranslation || (qaOnly ? body.customerTranslation : ''));
+  const customerTranslation = qaOnly ? sanitizeText(body.customerTranslation || '') : '';
   if (qaOnly) {
+    if (!originalText) throw new Error('The English source file is required');
+    if (!customerTranslation) throw new Error('Translation is required');
     if (!aiTranslation) throw new Error('Translation is required');
   } else {
     if (!originalText) throw new Error('Text is required');
@@ -573,6 +588,7 @@ function buildClientJob(body, pricing = {}) {
     sentenceParaMap,
     language,
     aiTranslation: finalAi,
+    customerTranslation: qaOnly ? customerTranslation : null,
     qaOnly,
     qaFindings: qaOnly ? sanitizeQaFindings(body.qaFindings) : null,
     status: 'awaiting_review',
@@ -591,6 +607,8 @@ function buildClientJob(body, pricing = {}) {
 
 module.exports = {
   ALLOWED_LANGUAGES,
+  MAX_FILE_BYTES,
+  MAX_FILE_MB,
   MAX_TEXT_CHARS,
   applySecurityHeaders,
   assertHuman,
@@ -601,6 +619,7 @@ module.exports = {
   publicJob,
   rebuildTranslationFromSentences,
   sanitizeSentenceList,
+  sanitizeSentenceStatus,
   sanitizeQaFindings,
   revisorJob,
   sourceFileForDownload,

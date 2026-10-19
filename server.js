@@ -7,6 +7,7 @@ const tls = require('tls');
 
 const security = require('./security');
 const okapi = require('./okapi');
+const propagate = require('./propagate');
 
 const PUBLIC_DIR = path.join(__dirname, 'public');
 const JOBS_FILE = path.join(__dirname, 'jobs.json');
@@ -21,9 +22,9 @@ const CLIENT_PER_WORD_EUR = 0.04;
 const AGENCY_PER_WORD_EUR = 0.10;
 const STALE_CLAIM_MS = 4 * 60 * 60 * 1000;
 const MAX_JSON_BODY = 1024 * 1024;
-const MAX_JOB_BODY = 16 * 1024 * 1024;
+const MAX_JOB_BODY = 96 * 1024 * 1024;
 const MAX_TRANSLATE_BODY = 128 * 1024;
-const MAX_OKAPI_BODY = 20 * 1024 * 1024;
+const MAX_OKAPI_BODY = 48 * 1024 * 1024;
 
 function loadAuthConfig() {
   // Used for SESSION_SECRET (required) and an optional legacy admin login.
@@ -268,6 +269,15 @@ async function sendDeliveryEmail(req, job) {
   const link = `${publicBaseUrl(req)}/?job=${encodeURIComponent(job.id)}&t=${encodeURIComponent(token)}`;
   const translation = String(job.revisedTranslation || '').trim();
   const lang = job.language || 'your language';
+  const findings = security.sanitizeQaFindings(job.qaFindings);
+  const findingLines = [];
+  if (findings && (findings.summary || (findings.issues && findings.issues.length))) {
+    findingLines.push('AI check summary', findings.summary || '');
+    for (const issue of findings.issues || []) {
+      if (issue && issue.detail) findingLines.push(`- ${issue.severity || 'note'}: ${issue.detail}`);
+    }
+    findingLines.push('');
+  }
   const subject = `Your ${lang} translation is ready`;
   const text = [
     'Your LingoCheck translation is ready.',
@@ -275,16 +285,21 @@ async function sendDeliveryEmail(req, job) {
     'Open this link to view it and download the formatted file:',
     link,
     '',
+    ...findingLines,
     '--- Translation ---',
     translation,
     '',
     'If you did not request this, you can ignore this email.'
   ].join('\n');
+  const findingsHtml = findingLines.length
+    ? `<div style="font-size:14px;line-height:1.6;background:#fbf6ea;border:1px solid rgba(180,120,40,0.28);border-radius:12px;padding:16px;margin:0 0 20px"><p style="margin:0 0 8px;font-weight:600">AI check summary</p><p style="margin:0">${escapeHtml(findings.summary || '')}</p>${(findings.issues || []).map((issue) => `<p style="margin:8px 0 0"><strong>${escapeHtml(issue.severity || 'note')}</strong> — ${escapeHtml(issue.detail || '')}</p>`).join('')}</div>`
+    : '';
   const html = `<div style="font-family:Arial,sans-serif;max-width:560px;margin:0 auto;padding:24px;color:#1c1430">
     <p style="font-size:14px;color:#6b6480;margin:0 0 12px">LingoCheck</p>
     <h1 style="font-size:22px;font-weight:600;margin:0 0 16px">Your ${escapeHtml(lang)} translation is ready</h1>
     <p style="font-size:15px;line-height:1.6;margin:0 0 20px">A certified translator has finished your assignment. Open the link below to view it and download the formatted file.</p>
     <p style="margin:0 0 24px"><a href="${escapeHtml(link)}" style="display:inline-block;background:#6d4fd8;color:#ffffff;text-decoration:none;padding:12px 18px;border-radius:10px;font-weight:600">Open your translation</a></p>
+    ${findingsHtml}
     <div style="font-size:14px;line-height:1.7;white-space:pre-wrap;background:#f7f5fb;border:1px solid rgba(92,70,168,0.14);border-radius:12px;padding:16px">${escapeHtml(translation)}</div>
     <p style="font-size:12px;color:#6b6480;margin:20px 0 0">If you did not request this, you can ignore this email.</p>
   </div>`;
@@ -704,17 +719,54 @@ function requireRevisor(req) {
 }
 
 // ── Jobs ──────────────────────────────────────────────────────────────────
+function sleepSync(ms) {
+  Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
+}
+
+function isFileLockError(err) {
+  const code = err && err.code;
+  return code === 'UNKNOWN' || code === 'EBUSY' || code === 'EPERM' || code === 'EACCES';
+}
+
+function readJobsFile() {
+  let last;
+  for (let attempt = 0; attempt < 6; attempt++) {
+    try {
+      return fs.readFileSync(JOBS_FILE, 'utf8');
+    } catch (err) {
+      last = err;
+      if (!isFileLockError(err) || attempt === 5) throw err;
+      sleepSync(40 * (attempt + 1));
+    }
+  }
+  throw last;
+}
+
 function loadJobs() {
   if (!fs.existsSync(JOBS_FILE)) return [];
   try {
-    return JSON.parse(fs.readFileSync(JOBS_FILE, 'utf8'));
+    return JSON.parse(readJobsFile());
   } catch {
     return [];
   }
 }
 
 function saveJobs(jobs) {
-  fs.writeFileSync(JOBS_FILE, JSON.stringify(jobs), 'utf8');
+  const payload = JSON.stringify(jobs);
+  const tmp = JOBS_FILE + '.tmp';
+  let last;
+  for (let attempt = 0; attempt < 6; attempt++) {
+    try {
+      fs.writeFileSync(tmp, payload, 'utf8');
+      fs.renameSync(tmp, JOBS_FILE);
+      return;
+    } catch (err) {
+      last = err;
+      if (!isFileLockError(err) || attempt === 5) throw err;
+      sleepSync(50 * (attempt + 1));
+    }
+  }
+  throw last;
 }
 
 function countWords(text) {
@@ -959,12 +1011,14 @@ function parseQaCheckJson(raw) {
 async function handleQaCheck(req, res) {
   if (!enforceJsonContentType(req, res)) return;
   if (!enforceRateLimit(req, res, 'qa-check', { limit: 8, windowMs: 60 * 1000 })) return;
-  const body = await readBodyJson(req, MAX_TRANSLATE_BODY);
+  const body = await readBodyJson(req, MAX_TRANSLATE_BODY * 2);
   if (!(await requireHuman(req, res, body))) return;
 
   const text = security.sanitizeText(body.text);
+  const sourceText = security.sanitizeText(body.sourceText);
   const language = security.sanitizeLanguage(body.language);
   if (!text) return sendJson(res, 400, { error: 'Missing translation text' });
+  if (!sourceText) return sendJson(res, 400, { error: 'The English source is required' });
   if (!language) return sendJson(res, 400, { error: 'Missing language' });
 
   const apiKey = loadAnthropicApiKey();
@@ -979,18 +1033,20 @@ async function handleQaCheck(req, res) {
   }
 
   const system = [
-    `You are a professional ${language} translation quality checker specializing in AI hallucinations.`,
-    'The user will paste a translation produced by another AI. There may be no English source.',
-    'Check for likely hallucinations and AI artifacts: invented facts, names, numbers, dates, or citations;',
-    'unsupported claims; internal contradictions; generic filler that invents details; obvious machine-translation nonsense.',
-    'Preserve paragraph structure and meaning. Only fix clear problems — do not rewrite style unnecessarily.',
+    `You are a professional ${language} translation editor.`,
+    'You will receive an English source and a customer translation in the target language.',
+    'Correct the translation only where it misses, adds, or distorts the source, or where it contains a clear AI artifact.',
+    'Do not restyle sentences that already say the same thing as the source.',
+    'Keep the customer translation’s paragraph breaks. Do not merge, split, or reorder paragraphs unless a paragraph was invented or a source paragraph is missing.',
     'Respond with ONLY valid JSON (no markdown fences) in this exact shape:',
     '{"checkedTranslation":"...","summary":"one short paragraph","issues":[{"severity":"high|medium|low","detail":"..."}]}',
-    'If nothing serious is wrong, return the original text as checkedTranslation, a brief reassuring summary, and an empty issues array.'
+    'checkedTranslation is the full corrected translation. If nothing needs to change, return the customer translation unchanged, a brief reassuring summary, and an empty issues array.',
+    'Each issue should say what was wrong compared with the English source.'
   ].join(' ');
+  const userContent = `ENGLISH SOURCE:\n${sourceText}\n\nCUSTOMER TRANSLATION:\n${text}`;
 
   try {
-    const raw = await callAnthropicTranslation(system, text, apiKey, 8192);
+    const raw = await callAnthropicTranslation(system, userContent, apiKey, 8192);
     const parsed = parseQaCheckJson(raw);
     const checkedTranslation = security.sanitizeText(parsed?.checkedTranslation || text);
     const findings = security.sanitizeQaFindings({
@@ -1046,8 +1102,8 @@ async function handleOkapiExtract(req, res) {
   } catch {
     return sendJson(res, 400, { error: 'Invalid file data' });
   }
-  if (!buf.length || buf.length > 10 * 1024 * 1024) {
-    return sendJson(res, 400, { error: 'File too large (max 10 MB)' });
+  if (!buf.length || buf.length > security.MAX_FILE_BYTES) {
+    return sendJson(res, 400, { error: `File too large (max ${security.MAX_FILE_MB} MB)` });
   }
 
   try {
@@ -1098,9 +1154,10 @@ async function handleOkapiMerge(req, res) {
   const pkg = security.sanitizeOkapiPackage(body.okapi);
   const translations = security.sanitizeSentenceList(body.translations)
     || security.sanitizeSentenceList(body.translationSentences);
+  const fullText = security.sanitizeText(body.fullText || '');
   if (!fileB64) return sendJson(res, 400, { error: 'Original DOCX is required' });
   if (!pkg?.xliffB64) return sendJson(res, 400, { error: 'Okapi XLIFF package is required' });
-  if (!translations?.length) return sendJson(res, 400, { error: 'Translated sentences are required' });
+  if (!translations?.length && !fullText) return sendJson(res, 400, { error: 'Translated text is required' });
 
   let original;
   try {
@@ -1108,8 +1165,8 @@ async function handleOkapiMerge(req, res) {
   } catch {
     return sendJson(res, 400, { error: 'Invalid original file data' });
   }
-  if (!original.length || original.length > 10 * 1024 * 1024) {
-    return sendJson(res, 400, { error: 'Original file too large' });
+  if (!original.length || original.length > security.MAX_FILE_BYTES) {
+    return sendJson(res, 400, { error: `Original file too large (max ${security.MAX_FILE_MB} MB)` });
   }
 
   let xliffXml;
@@ -1125,7 +1182,8 @@ async function handleOkapiMerge(req, res) {
       sourceLang: pkg.sourceLang,
       targetLang: pkg.targetLang,
       fileName: pkg.fileName || 'document.docx',
-      translations
+      translations: translations || undefined,
+      fullText
     });
     return sendJson(res, 200, {
       fileB64: out.toString('base64'),
@@ -1180,6 +1238,155 @@ async function handleRevisorUnclaim(req, res, id, session) {
   return sendJson(res, 200, security.revisorJob(jobs[idx]));
 }
 
+function loadClaimedJob(id, session) {
+  const jobs = loadJobs();
+  const idx = jobs.findIndex((job) => job.id === id);
+  if (idx === -1) return { error: { status: 404, error: 'Job not found' } };
+  const job = jobs[idx];
+  if (job.status === 'complete') return { error: { status: 400, error: 'Completed jobs cannot be edited' } };
+  if (!job.claimedByRevisorId) return { error: { status: 403, error: 'Claim this job first' } };
+  if (job.claimedByRevisorId !== session.revisorId) {
+    return { error: { status: 403, error: 'This job is claimed by another revisor' } };
+  }
+  return { jobs, idx, job };
+}
+
+function snapshotFromBody(body) {
+  const sources = security.sanitizeSentenceList(body.sources) || [];
+  const targets = security.sanitizeSentenceList(body.targets) || [];
+  if (!sources.length || sources.length !== targets.length) return null;
+  const status = security.sanitizeSentenceStatus(body.status);
+  while (status.length < sources.length) status.push('');
+  const meta = propagate.ensureMeta(sources.length, body.meta);
+  const paraMap = Array.isArray(body.paraMap)
+    ? body.paraMap.slice(0, sources.length).map((n) => Number(n) || 0)
+    : sources.map(() => 0);
+  return { sources, targets, status, meta, paraMap };
+}
+
+async function handlePropagate(req, res, id, session) {
+  const loaded = loadClaimedJob(id, session);
+  if (loaded.error) return sendJson(res, loaded.error.status, { error: loaded.error.error });
+  const body = await readBodyJson(req);
+  const snap = snapshotFromBody(body);
+  if (!snap) return sendJson(res, 400, { error: 'Segment list is required' });
+  const sourceIndex = Number(body.sourceIndex);
+  if (!Number.isInteger(sourceIndex) || sourceIndex < 0 || sourceIndex >= snap.sources.length) {
+    return sendJson(res, 400, { error: 'Segment is required' });
+  }
+  const previousTarget = security.sanitizeText(body.previousTarget || '');
+  const newTarget = security.sanitizeText(body.newTarget || '');
+  const mode = body.mode === 'auto' ? 'auto' : 'confirm';
+  const scope = mode === 'auto'
+    ? 'all'
+    : (body.scope === 'checked' || body.scope === 'unchecked' ? body.scope : 'all');
+  const onlyIndexes = Array.isArray(body.onlyIndexes)
+    ? body.onlyIndexes.map(Number).filter((n) => Number.isInteger(n) && n >= 0 && n < snap.sources.length)
+    : null;
+  const excludeIndexes = Array.isArray(body.excludeIndexes)
+    ? body.excludeIndexes.map(Number).filter((n) => Number.isInteger(n) && n >= 0 && n < snap.sources.length)
+    : [];
+  const summary = propagate.summarizeRepeats(snap, sourceIndex, newTarget);
+  if (body.apply !== true) {
+    return sendJson(res, 200, { applied: 0, summary, sentenceStatus: snap.status });
+  }
+  const result = propagate.applyBatch(snap, {
+    sourceIndex,
+    previousTarget,
+    newTarget,
+    mode,
+    scope,
+    onlyIndexes,
+    excludeIndexes,
+    now: Date.now()
+  });
+  if (!result.changes.length) {
+    return sendJson(res, 200, {
+      applied: 0,
+      summary,
+      targets: snap.targets,
+      sentenceMeta: snap.meta,
+      sentenceStatus: result.status
+    });
+  }
+  const revision = {
+    id: 'rev_' + crypto.randomBytes(8).toString('hex'),
+    type: 'propagate',
+    at: Date.now(),
+    revisorId: session.revisorId,
+    sourceId: result.sourceId,
+    sourceIndex,
+    oldTarget: previousTarget,
+    newTarget,
+    scope: result.scope,
+    changes: result.changes,
+    undoneAt: null
+  };
+  const history = Array.isArray(loaded.job.revisionHistory) ? loaded.job.revisionHistory.slice(-99) : [];
+  history.push(revision);
+  const revised = security.rebuildTranslationFromSentences(result.targets, snap.paraMap);
+  loaded.jobs[loaded.idx] = {
+    ...loaded.job,
+    status: 'in_progress',
+    propagateSources: snap.sources,
+    translationSentences: result.targets,
+    sentenceMeta: result.meta,
+    sentenceStatus: result.status,
+    sentenceParaMap: snap.paraMap,
+    revisedTranslation: revised,
+    revisionHistory: history
+  };
+  saveJobs(loaded.jobs);
+  return sendJson(res, 200, {
+    applied: result.changes.length,
+    appliedIndexes: result.changes.map((change) => change.index),
+    revisionId: revision.id,
+    targets: result.targets,
+    sentenceMeta: result.meta,
+    sentenceStatus: result.status,
+    summary
+  });
+}
+
+async function handlePropagateUndo(req, res, id, session) {
+  const loaded = loadClaimedJob(id, session);
+  if (loaded.error) return sendJson(res, loaded.error.status, { error: loaded.error.error });
+  const body = await readBodyJson(req);
+  const requested = Array.isArray(body.revisionIds) && body.revisionIds.length
+    ? body.revisionIds.map((item) => String(item || '')).filter(Boolean)
+    : [String(body.revisionId || '')].filter(Boolean);
+  const history = Array.isArray(loaded.job.revisionHistory) ? loaded.job.revisionHistory.slice() : [];
+  const revisions = [];
+  for (const revisionId of requested) {
+    const revision = history.find((item) => item && item.id === revisionId && item.type === 'propagate');
+    if (!revision) return sendJson(res, 404, { error: 'Propagation was not found' });
+    if (revision.undoneAt) return sendJson(res, 400, { error: 'Propagation was already undone' });
+    revisions.push(revision);
+  }
+  if (!revisions.length) return sendJson(res, 404, { error: 'Propagation was not found' });
+  const targets = Array.isArray(loaded.job.translationSentences) ? loaded.job.translationSentences.slice() : [];
+  const status = Array.isArray(loaded.job.sentenceStatus) ? loaded.job.sentenceStatus.slice() : [];
+  const undone = propagate.undoRevisions(targets, loaded.job.sentenceMeta, status, revisions);
+  const undoneAt = Date.now();
+  revisions.forEach((revision) => { revision.undoneAt = undoneAt; });
+  const paraMap = Array.isArray(loaded.job.sentenceParaMap) ? loaded.job.sentenceParaMap : [];
+  loaded.jobs[loaded.idx] = {
+    ...loaded.job,
+    translationSentences: undone.targets,
+    sentenceMeta: undone.meta,
+    sentenceStatus: undone.status,
+    revisedTranslation: security.rebuildTranslationFromSentences(undone.targets, paraMap),
+    revisionHistory: history
+  };
+  saveJobs(loaded.jobs);
+  return sendJson(res, 200, {
+    undone: revisions.reduce((sum, revision) => sum + (revision.changes ? revision.changes.length : 0), 0),
+    targets: undone.targets,
+    sentenceMeta: undone.meta,
+    sentenceStatus: undone.status
+  });
+}
+
 async function handleRevisorPatch(req, res, id, session) {
   const jobs = loadJobs();
   const idx = jobs.findIndex(j => j.id === id);
@@ -1206,6 +1413,9 @@ async function handleRevisorPatch(req, res, id, session) {
         job.sentenceParaMap
       ) || translationSentences.join(' ');
     }
+  }
+  if (Array.isArray(body.sentenceStatus)) {
+    merged.sentenceStatus = security.sanitizeSentenceStatus(body.sentenceStatus);
   }
   const completing = body.status === 'complete' && job.status !== 'complete';
   if (completing) {
@@ -1464,9 +1674,19 @@ const server = http.createServer(async (req, res) => {
       }
 
       // POST /api/revisor/jobs/:id/unclaim
-      const unclaimMatch = pathname.match(/^\/api\/revisor\/jobs\/([^\/]+)\/unclaim$/);
+      const unclaimMatch = pathname.match(/^\/api\/revisor\/jobs\/([^/]+)\/unclaim$/);
       if (method === 'POST' && unclaimMatch) {
         return await handleRevisorUnclaim(req, res, unclaimMatch[1], session);
+      }
+
+      const undoMatch = pathname.match(/^\/api\/revisor\/jobs\/([^/]+)\/propagate\/undo$/);
+      if (method === 'POST' && undoMatch) {
+        return await handlePropagateUndo(req, res, undoMatch[1], session);
+      }
+
+      const propagateMatch = pathname.match(/^\/api\/revisor\/jobs\/([^/]+)\/propagate$/);
+      if (method === 'POST' && propagateMatch) {
+        return await handlePropagate(req, res, propagateMatch[1], session);
       }
 
       // PATCH /api/revisor/jobs/:id
