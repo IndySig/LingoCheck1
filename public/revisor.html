@@ -5,6 +5,10 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>LingoCheck — Revisor Panel</title>
 <script src="text-segments.js"></script>
+<script src="vendor/diff-match-patch.js"></script>
+<script src="char-diff.js"></script>
+<script src="vendor/diff.js"></script>
+<script src="word-diff.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/react/18.2.0/umd/react.production.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.2.0/umd/react-dom.production.min.js"></script>
 <link href="https://fonts.googleapis.com/css2?family=Kufam:ital,wght@0,400;0,500;0,600;0,700;1,400&family=Manrope:wght@400;500;600;700&display=swap" rel="stylesheet">
@@ -91,12 +95,24 @@
   @media (prefers-reduced-motion: reduce){
     *,*::before,*::after{animation-duration:0.01ms!important;transition-duration:0.01ms!important;}
   }
+  .sentence-target{
+    border:1px solid rgba(42,36,56,0.14);
+    border-radius:8px;
+    background:#f7f6f8;
+  }
+  .sentence-target.is-checked{background:#f7fcf9;}
+  .sentence-target:focus{
+    outline:none;
+    border-color:#6d4fd8;
+    box-shadow:0 0 0 3px rgba(109,79,216,0.18);
+    background:#ffffff;
+  }
 </style>
 </head>
 <body>
 <div id="root"></div>
 <script>
-const {useState,useEffect,useCallback,useMemo}=React;
+const {useState,useEffect,useCallback,useMemo,useRef}=React;
 
 const C={deep:"#2a2438",mid:"#5b3fc4",accent:"#6d4fd8",light:"#6d4fd8",pale:"#6d4fd8",lilac:"#d9d0f5",surface:"#ffffff",card:"#ffffff",border:"rgba(42,36,56,0.10)",text:"#2a2438",muted:"#6a6178",white:"#ffffff",green:"#1f7a4d",greenBg:"rgba(238,247,241,0.9)",greenBorder:"rgba(31,122,77,0.18)",amber:"#8a6800",amberBg:"rgba(255,248,230,0.9)",amberBorder:"rgba(138,104,0,0.18)",soft:"rgba(255,255,255,0.55)"};
 const st={
@@ -224,26 +240,42 @@ function alignTranslationToSegments(origSegments, translationText){
   return splitTextByWeights(t.replace(/\n+/g, " "), weights);
 }
 
+function splitDocumentSentences(text){
+  const raw = String(text || "").trim();
+  if(!raw) return [];
+  const TS = window.LcTextSegments;
+  if(!TS) return [raw];
+  return TS.normalizeDocumentSegments(raw).flatMap(function(part){
+    const bits = TS.splitSegmentIntoSentences(part);
+    return bits.length ? bits : [part];
+  });
+}
+
+function fitSentenceList(parts, count){
+  const src = (parts || []).slice();
+  if(count <= 0) return [];
+  if(src.length === count) return src;
+  if(src.length > count){
+    const head = src.slice(0, count - 1);
+    head.push(src.slice(count - 1).join(" "));
+    return head;
+  }
+  while(src.length < count) src.push("");
+  return src;
+}
+
 function buildSentenceReview(job, sourceText, translationText){
   const TS = window.LcTextSegments;
   const segments = getTextSegments(job, sourceText);
   if(!segments.length) return { sentences: [], transSentences: [], paraMap: [], paragraphCount: 0 };
 
   if(TS && TS.alignSentenceTranslations){
-    const storedTrans = job?.translationSentences;
+    const storedTrans = job?.qaOnly ? null : job?.translationSentences;
     const review = TS.alignSentenceTranslations(
       segments,
       translationText,
       storedTrans
     );
-    if(job && job.qaOnly){
-      return {
-        sentences: review.sentences,
-        transSentences: review.sentences.slice(),
-        paraMap: review.paraMap,
-        paragraphCount: review.paragraphCount
-      };
-    }
     return review;
   }
 
@@ -254,6 +286,88 @@ function buildSentenceReview(job, sourceText, translationText){
     paraMap: units.paraMap,
     paragraphCount: units.paragraphCount
   };
+}
+
+function jobHasEnglishSource(job){
+  return !!String(job && job.originalText || "").trim();
+}
+
+function jobPreviewText(job){
+  if(job && job.qaOnly && jobHasEnglishSource(job)) return job.originalText || "";
+  if(job && job.qaOnly) return job.aiTranslation || "";
+  return (job && job.originalText) || "";
+}
+
+function aiChangedTranslation(job){
+  const customer = String(job && job.customerTranslation || "");
+  const checked = String(job && job.aiTranslation || "");
+  return !!customer && customer !== checked;
+}
+
+const trackDelStyle = {
+  textDecoration:"line-through",
+  textDecorationColor:"#f87171",
+  color:"#b45454",
+  background:"none",
+  whiteSpace:"pre-wrap",
+  margin:"0 1px"
+};
+const trackInsStyle = {
+  textDecoration:"none",
+  background:"rgba(109,79,216,0.22)",
+  borderRadius:3,
+  padding:"0 2px",
+  margin:"0 1px",
+  color:"inherit",
+  whiteSpace:"pre-wrap"
+};
+
+function trackChangeNodes(e, parts){
+  return (parts || []).map(function(p, i){
+    if(p.type === "removed") return e("del",{key:i,style:trackDelStyle}, p.text);
+    if(p.type === "added") return e("ins",{key:i,style:trackInsStyle}, p.text);
+    return e("span",{key:i}, p.text);
+  });
+}
+
+function customerCorrectionParts(oldText, newText){
+  const diff = window.LcCharDiff;
+  if(!diff || typeof diff.charDiff !== "function") return [{ type:"equal", text:String(newText || "") }];
+  return diff.charDiff(oldText || "", newText || "");
+}
+
+function MarkedTranslation({customerText, checkedText}){
+  const e = React.createElement;
+  const parts = useMemo(function(){
+    if(typeof customerText !== "string") return [];
+    return customerCorrectionParts(customerText, checkedText || "");
+  }, [customerText, checkedText]);
+  const changed = parts.some(function(p){ return p.type !== "equal"; });
+  if(!customerText) return null;
+  return e("div",null,
+    e("div",{style:{fontSize:12,color:C.muted,lineHeight:1.5,marginBottom:8}},
+      changed
+        ?"Struck-out text is the customer’s wording. Highlighted text was added by LingoCheck."
+        :"LingoCheck did not change the customer’s translation."
+    ),
+    e("div",{style:{fontSize:13,color:C.text,lineHeight:1.75,whiteSpace:"pre-wrap"}},
+      trackChangeNodes(e, parts)
+    )
+  );
+}
+
+function shortLang(language){
+  const name = String(language || "").trim().toLowerCase();
+  const known = {dutch:"NL",nederlands:"NL",english:"EN",german:"DE",deutsch:"DE",french:"FR",spanish:"ES",italian:"IT",portuguese:"PT"};
+  if(known[name]) return known[name];
+  if(/^[a-z]{2}([-_][a-z]{2})?$/i.test(name)) return name.slice(0, 2).toUpperCase();
+  return "";
+}
+
+function growSentenceField(el){
+  if(!el || !el.style) return;
+  el.style.height = "0px";
+  el.style.height = el.scrollHeight + "px";
 }
 
 function sentencesToParagraphText(sentences, paraMap, paragraphCount){
@@ -482,10 +596,11 @@ function QueueTab({me,allJobs,claimJob,setTab,setFocusJobId,isCompact,payoutRate
               e("div",{style:{fontSize:13,fontWeight:600,color:C.text,marginBottom:6,display:"flex",alignItems:"center",gap:8,flexWrap:"wrap"}},
                 job.qaOnly?job.language:"EN → "+job.language,
                 job.qaOnly&&e("span",{style:{fontSize:11,fontWeight:500,color:C.muted,background:C.soft,border:`1px solid ${C.border}`,padding:"2px 8px",borderRadius:8}},"QA only"),
+                aiChangedTranslation(job)&&e("span",{style:{fontSize:11,fontWeight:500,color:C.accent,background:C.lilac,border:"1px solid rgba(109,79,216,0.28)",padding:"2px 8px",borderRadius:8}},"AI changes"),
                 stale&&e("span",{style:{fontSize:11,fontWeight:500,color:C.amber,background:C.amberBg,border:`1px solid ${C.amberBorder}`,padding:"2px 8px",borderRadius:8}},"Stale — reclaim"),
                 typeof job.sourceWordCount==="number"&&e("span",{style:{fontSize:11,fontWeight:500,color:C.muted}}, job.sourceWordCount," words · ",fmtEur(payout))
               ),
-              e("div",{style:{fontSize:12,color:C.muted,lineHeight:1.6,maxHeight:60,overflow:"hidden"}},(job.qaOnly?job.aiTranslation:job.originalText||"").substring(0,260),(job.qaOnly?job.aiTranslation:job.originalText||"").length>260?"…":""),
+              e("div",{style:{fontSize:12,color:C.muted,lineHeight:1.6,maxHeight:60,overflow:"hidden"}},(()=>{const preview=jobPreviewText(job);return preview.substring(0,260)+(preview.length>260?"…":"");})()),
               e("div",{style:{fontSize:11,color:C.muted,marginTop:8}},formatWaiting(job.createdAt)," · submitted ",formatDateTime(job.createdAt))
             ),
             e("button",{className:"primary",onClick:()=>onClaim(job.id),disabled:claimingId===job.id,style:{...st.btn,padding:"12px 18px",background:C.accent,color:C.white,fontSize:13,whiteSpace:"nowrap",width:isCompact?"100%":"auto"}},
@@ -497,7 +612,103 @@ function QueueTab({me,allJobs,claimJob,setTab,setFocusJobId,isCompact,payoutRate
   );
 }
 
-function ReviewEditor({selectedJob,updateJob,unclaimJob,onDone,onReleased,isCompact,payoutRate}){
+function loadPropagateMode(revisorId){
+  try{
+    return localStorage.getItem("lc_propagate_mode_"+(revisorId||"anon"))==="auto" ? "auto" : "confirm";
+  }catch(e){
+    return "confirm";
+  }
+}
+
+function normalizePropagateSource(text){
+  return String(text == null ? "" : text).trim().replace(/\s+/g, " ");
+}
+
+function sameSourceOrder(sources, sourceIndex){
+  const needle = normalizePropagateSource(sources[sourceIndex]);
+  if(!needle) return [];
+  const order = [];
+  for(let i = 0; i < sources.length; i++){
+    if(normalizePropagateSource(sources[i]) === needle) order.push(i);
+  }
+  return order;
+}
+
+function nextRepeatIndex(indexes, currentIndex){
+  if(!indexes || !indexes.length) return -1;
+  const at = indexes.indexOf(currentIndex);
+  if(at < 0) return indexes[0];
+  return indexes[(at + 1) % indexes.length];
+}
+
+function repeatCounts(sources, targets, status, sourceIndex){
+  const needle = normalizePropagateSource(sources[sourceIndex]);
+  const next = String(targets[sourceIndex] == null ? "" : targets[sourceIndex]).trim();
+  let checked = 0;
+  let unchecked = 0;
+  for(let i = 0; i < sources.length; i++){
+    if(i === sourceIndex) continue;
+    if(normalizePropagateSource(sources[i]) !== needle) continue;
+    if(String(targets[i] == null ? "" : targets[i]).trim() === next) continue;
+    if(status[i] === "checked") checked++;
+    else unchecked++;
+  }
+  return {checked:checked, unchecked:unchecked, total:checked + unchecked};
+}
+
+function pendingRepeatIndexes(order, sourceIndex, targets, proposed, reviewed){
+  const proposedText = String(proposed == null ? "" : proposed).trim();
+  const done = new Set(reviewed || []);
+  return (order || []).filter(function(index){
+    if(index === sourceIndex || done.has(index)) return false;
+    const current = targets && targets[index] != null ? String(targets[index]).trim() : "";
+    return current !== proposedText;
+  });
+}
+
+function nextUntreatedIndex(order, cursor, pending){
+  const list = order || [];
+  const allowed = new Set(pending || []);
+  if(!list.length || !allowed.size) return -1;
+  const start = list.indexOf(cursor);
+  const from = start < 0 ? 0 : start + 1;
+  for(let step = 0; step < list.length; step++){
+    const index = list[(from + step) % list.length];
+    if(allowed.has(index)) return index;
+  }
+  return -1;
+}
+
+const propagateDelStyle = {
+  background:"#fde8e8",
+  color:"#8f2d2d",
+  textDecoration:"line-through",
+  borderRadius:3,
+  padding:"0 2px",
+  whiteSpace:"pre-wrap"
+};
+const propagateInsStyle = {
+  background:"#e5f6ea",
+  color:"#1f7a4d",
+  textDecoration:"none",
+  borderRadius:3,
+  padding:"0 2px",
+  whiteSpace:"pre-wrap"
+};
+
+function propagateWordNodes(e, oldText, newText){
+  const diff = window.LcWordDiff;
+  const parts = diff && typeof diff.wordDiffParts === "function"
+    ? diff.wordDiffParts(oldText, newText)
+    : [{type:"equal", text:String(newText || "")}];
+  return parts.map(function(part, i){
+    if(part.type === "removed") return e("del",{key:i,style:propagateDelStyle}, part.text);
+    if(part.type === "added") return e("ins",{key:i,style:propagateInsStyle}, part.text);
+    return e("span",{key:i}, part.text);
+  });
+}
+
+function ReviewEditor({selectedJob,updateJob,unclaimJob,onDone,onReleased,isCompact,payoutRate,revisorId}){
   const e=React.createElement;
   const[editedText,setEditedText]=useState(selectedJob.revisedTranslation||selectedJob.aiTranslation||"");
   const[mode,setMode]=useState("sentences");
@@ -509,7 +720,42 @@ function ReviewEditor({selectedJob,updateJob,unclaimJob,onDone,onReleased,isComp
   const[saving,setSaving]=useState(false);
   const[releasing,setReleasing]=useState(false);
   const[savedNote,setSavedNote]=useState("");
+  const[customerSentences,setCustomerSentences]=useState([]);
+  const[aiSentences,setAiSentences]=useState([]);
+  const[sentenceStatus,setSentenceStatus]=useState([]);
+  const[sentenceMeta,setSentenceMeta]=useState([]);
+  const[propagateMode,setPropagateMode]=useState(()=>loadPropagateMode(revisorId));
+  const propagateModeRef=useRef(loadPropagateMode(revisorId));
+  const[propagateBar,setPropagateBar]=useState(null);
+  const[propagateToast,setPropagateToast]=useState(null);
+  const[propagateHighlights,setPropagateHighlights]=useState({});
+  const focusSnapRef=useRef(null);
+  const jumpFocusIndexRef=useRef(null);
+  const applyingPropagateRef=useRef(false);
+  const propagatedSkipRef=useRef(null);
   const[isWide,setIsWide]=useState(()=>window.matchMedia && window.matchMedia("(min-width: 900px)").matches);
+  const sentenceColumns = useMedia("(min-width: 768px)");
+
+  useEffect(()=>{
+    if(!propagateToast) return;
+    const timer = setTimeout(()=>setPropagateToast(null), 8000);
+    return ()=>clearTimeout(timer);
+  },[propagateToast]);
+
+  useEffect(function(){
+    if(mode !== "sentences") return;
+    document.querySelectorAll("textarea.sentence-target").forEach(growSentenceField);
+  },[mode, editedSentences]);
+
+  useEffect(function(){
+    if(!propagateBar || (propagateBar.phase !== "review" && propagateBar.phase !== "browse")) return;
+    function onKey(ev){
+      if(ev.key !== "Escape") return;
+      setPropagateBar(null);
+    }
+    document.addEventListener("keydown", onKey);
+    return function(){ document.removeEventListener("keydown", onKey); };
+  },[propagateBar]);
 
   useEffect(()=>{
     if(!window.matchMedia) return;
@@ -526,14 +772,47 @@ function ReviewEditor({selectedJob,updateJob,unclaimJob,onDone,onReleased,isComp
 
   useEffect(()=>{
     setEditedText(selectedJob.revisedTranslation||selectedJob.aiTranslation||"");
-    const source = selectedJob.qaOnly ? (selectedJob.aiTranslation||"") : selectedJob.originalText;
+    const showSource = jobHasEnglishSource(selectedJob);
+    const legacyQa = selectedJob.qaOnly && !showSource;
+    const source = legacyQa ? (selectedJob.aiTranslation||"") : selectedJob.originalText;
     const translation = selectedJob.revisedTranslation||selectedJob.aiTranslation||"";
     const review = buildSentenceReview(selectedJob, source, translation);
-    setOrigSentences(review.sentences);
-    setEditedSentences(review.transSentences);
-    setSentenceParaMap(review.paraMap);
-    setParagraphCount(review.paragraphCount);
-    setMode("sentences");
+    let sentences = review.sentences;
+    let transSentences = review.transSentences;
+    let paraMap = review.paraMap;
+    let paragraphCount = review.paragraphCount;
+    if(selectedJob.qaOnly && showSource && window.LcTextSegments){
+      const units = LcTextSegments.buildSentenceUnits(getTextSegments(selectedJob, selectedJob.originalText));
+      sentences = units.sentences;
+      paraMap = units.paraMap;
+      paragraphCount = units.paragraphCount;
+      transSentences = fitSentenceList(splitDocumentSentences(translation), sentences.length);
+    }
+    setOrigSentences(sentences);
+    setEditedSentences(transSentences);
+    setSentenceParaMap(paraMap);
+    setParagraphCount(paragraphCount);
+    const savedStatus = Array.isArray(selectedJob.sentenceStatus) ? selectedJob.sentenceStatus : [];
+    setSentenceStatus((sentences || []).map((_, i) => savedStatus[i] === "checked" ? "checked" : ""));
+    const savedMeta = Array.isArray(selectedJob.sentenceMeta) ? selectedJob.sentenceMeta : [];
+    setSentenceMeta((sentences || []).map(function(_, i){
+      return {
+        id: (savedMeta[i] && savedMeta[i].id) || ("s"+i),
+        propagatedFrom: (savedMeta[i] && savedMeta[i].propagatedFrom) || null,
+        propagatedAt: (savedMeta[i] && savedMeta[i].propagatedAt) || null
+      };
+    }));
+    setPropagateBar(null);
+    setPropagateHighlights({});
+    if(selectedJob.qaOnly && selectedJob.customerTranslation && showSource){
+      setCustomerSentences(fitSentenceList(splitDocumentSentences(selectedJob.customerTranslation), sentences.length));
+      setAiSentences(fitSentenceList(splitDocumentSentences(selectedJob.aiTranslation||""), sentences.length));
+      setMode("full");
+    }else{
+      setCustomerSentences([]);
+      setAiSentences([]);
+      setMode("sentences");
+    }
     setSavedNote("");
   },[selectedJob.id]);
 
@@ -544,8 +823,388 @@ function ReviewEditor({selectedJob,updateJob,unclaimJob,onDone,onReleased,isComp
     const patch = { revisedTranslation: finalText };
     if(mode==="sentences" && editedSentences.length){
       patch.translationSentences = editedSentences.map(s => String(s||"").trim());
+      patch.sentenceStatus = editedSentences.map((_, i) => sentenceStatus[i] === "checked" ? "checked" : "");
     }
     return { finalText, patch };
+  }
+
+  function statusList(){
+    return editedSentences.map((_, i) => sentenceStatus[i] === "checked" ? "checked" : "");
+  }
+
+  function savePartStatus(next){
+    setSentenceStatus(next);
+    updateJob(selectedJob.id, { sentenceStatus: next }).catch(function(){});
+  }
+
+  function openPropagateBar(idx, statusNext, targets){
+    if(propagateModeRef.current !== "confirm" || statusNext[idx] !== "checked"){
+      setPropagateBar(function(bar){
+        if(bar && bar.sourceIndex === idx) return null;
+        return bar;
+      });
+      return false;
+    }
+    const order = sameSourceOrder(origSentences, idx);
+    if(order.length < 2){
+      setPropagateBar(null);
+      return false;
+    }
+    const counts = repeatCounts(origSentences, targets, statusNext, idx);
+    setPropagateBar({
+      phase: "start",
+      sourceIndex: idx,
+      order: order,
+      cursor: idx,
+      position: order.indexOf(idx) + 1,
+      proposed: targets[idx] == null ? "" : targets[idx],
+      reviewed: [],
+      applied: 0,
+      skipped: 0,
+      revisionIds: [],
+      total: counts.total,
+      checked: counts.checked,
+      unchecked: counts.unchecked
+    });
+    return true;
+  }
+
+  function togglePartStatus(idx){
+    const next = statusList();
+    next[idx] = next[idx] === "checked" ? "" : "checked";
+    savePartStatus(next);
+    if(next[idx] === "checked") openPropagateBar(idx, next, editedSentences);
+    else setPropagateBar(function(bar){ return bar && bar.sourceIndex === idx ? null : bar; });
+  }
+
+  function markPartChecked(idx){
+    const next = statusList();
+    next[idx] = "checked";
+    savePartStatus(next);
+    if(propagateBar && (propagateBar.phase === "review" || propagateBar.phase === "browse") && propagateBar.cursor === idx) return;
+    if(openPropagateBar(idx, next, editedSentences)) return;
+    const following = document.querySelector('[data-sentence-index="'+(idx+1)+'"]');
+    if(following && following.focus) following.focus();
+  }
+
+  function onSentenceKeyDown(ev, idx){
+    if(!((ev.ctrlKey || ev.metaKey) && ev.key === "Enter")) return;
+    ev.preventDefault();
+    markPartChecked(idx);
+  }
+
+  function choosePropagateMode(next){
+    propagateModeRef.current = next;
+    setPropagateMode(next);
+    if(next !== "confirm") setPropagateBar(null);
+    try{ localStorage.setItem("lc_propagate_mode_"+(revisorId||"anon"), next); }catch(e){}
+  }
+
+  function releasePropagateLock(){
+    setTimeout(function(){ applyingPropagateRef.current = false; }, 0);
+  }
+
+  async function maybePropagate(idx, previousTarget, newTarget, targets){
+    if(applyingPropagateRef.current || propagateModeRef.current !== "auto") return;
+    if(previousTarget === newTarget) return;
+    applyingPropagateRef.current = true;
+    try{
+      const data = await apiFetch("/api/revisor/jobs/"+encodeURIComponent(selectedJob.id)+"/propagate", {method:"POST", body:JSON.stringify({
+        sources: origSentences,
+        targets: targets,
+        status: statusList(),
+        meta: sentenceMeta,
+        paraMap: sentenceParaMap,
+        sourceIndex: idx,
+        previousTarget: previousTarget,
+        newTarget: newTarget,
+        mode: "auto",
+        scope: "all",
+        apply: true
+      })});
+      if(data.targets) setEditedSentences(data.targets);
+      if(data.sentenceMeta) setSentenceMeta(data.sentenceMeta);
+      if(data.sentenceStatus) setSentenceStatus(data.sentenceStatus);
+      if(data.applied){
+        propagatedSkipRef.current = {value:String(newTarget).trim(), indexes:new Set(data.appliedIndexes||[])};
+        rememberPropagateHighlights(data.appliedIndexes, targets, newTarget);
+        setPropagateToast({count:data.applied, revisionId:data.revisionId, appliedIndexes:data.appliedIndexes||[]});
+      }
+    }catch(ex){
+      setSavedNote(ex.message || "Could not repeat this correction");
+    }finally{
+      releasePropagateLock();
+    }
+  }
+
+  function onSentenceFocus(idx, value){
+    focusSnapRef.current = {idx:idx, value:value};
+    const fromJump = jumpFocusIndexRef.current === idx;
+    if(fromJump) jumpFocusIndexRef.current = null;
+    if(fromJump) return;
+    setPropagateHighlights(function(current){
+      if(!Object.prototype.hasOwnProperty.call(current, idx)) return current;
+      const next = Object.assign({}, current);
+      delete next[idx];
+      return next;
+    });
+    setPropagateBar(function(bar){
+      if(!bar) return bar;
+      if(bar.phase === "review" || bar.phase === "browse") return bar.cursor === idx ? bar : null;
+      if(bar.sourceIndex !== idx) return null;
+      return bar;
+    });
+  }
+
+  function onSentenceBlur(idx, ev){
+    const snap = focusSnapRef.current;
+    if(!snap || snap.idx !== idx) return;
+    const next = ev.target.value;
+    if(next === snap.value) return;
+    const skip = propagatedSkipRef.current;
+    if(skip && skip.indexes.has(idx) && next.trim() === skip.value){
+      skip.indexes.delete(idx);
+      return;
+    }
+    const targets = editedSentences.slice();
+    targets[idx] = next;
+    maybePropagate(idx, snap.value, next, targets);
+  }
+
+  function focusRepeat(index){
+    jumpFocusIndexRef.current = index;
+    const el = document.querySelector('[data-sentence-index="'+index+'"]');
+    if(el && el.scrollIntoView) el.scrollIntoView({block:"center"});
+    if(el && el.focus) el.focus();
+    setTimeout(function(){
+      if(jumpFocusIndexRef.current === index && document.activeElement !== el) jumpFocusIndexRef.current = null;
+    }, 0);
+  }
+
+  function rememberPropagateHighlights(indexes, beforeTargets, newTarget){
+    setPropagateHighlights(function(current){
+      const next = Object.assign({}, current);
+      (indexes || []).forEach(function(index){
+        const oldText = beforeTargets && beforeTargets[index] != null ? beforeTargets[index] : "";
+        if(String(oldText).trim() === String(newTarget == null ? "" : newTarget).trim()) return;
+        next[index] = {oldText:oldText, newText:newTarget};
+      });
+      return next;
+    });
+  }
+
+  function finishReviewRound(bar){
+    setPropagateBar(null);
+    if(!bar || (!bar.applied && !bar.skipped)) return;
+    setPropagateToast({
+      kind:"round",
+      applied:bar.applied || 0,
+      skipped:bar.skipped || 0,
+      revisionIds:(bar.revisionIds || []).slice(),
+      highlightIndexes:(bar.highlightIndexes || []).slice()
+    });
+  }
+
+  function moveReview(bar, reviewed, applied, skipped, revisionIds, highlightIndexes, targets, keepCursor){
+    const pending = pendingRepeatIndexes(bar.order, bar.sourceIndex, targets, bar.proposed, reviewed);
+    const stay = keepCursor && pending.indexOf(bar.cursor) >= 0;
+    const next = stay ? bar.cursor : nextUntreatedIndex(bar.order, bar.cursor, pending);
+    const patch = {
+      phase:"review",
+      reviewed:reviewed,
+      applied:applied,
+      skipped:skipped,
+      revisionIds:revisionIds,
+      highlightIndexes:highlightIndexes
+    };
+    if(next < 0){
+      finishReviewRound(Object.assign({}, bar, patch));
+      return;
+    }
+    setPropagateBar(Object.assign({}, bar, patch, {cursor:next}));
+    if(!stay) focusRepeat(next);
+  }
+
+  function jumpToNextRepeat(){
+    const bar = propagateBar;
+    if(!bar || bar.phase === "browse" || bar.phase === "review") return;
+    const proposed = editedSentences[bar.sourceIndex] == null ? "" : editedSentences[bar.sourceIndex];
+    const pending = pendingRepeatIndexes(bar.order, bar.sourceIndex, editedSentences, proposed, []);
+    const next = nextUntreatedIndex(bar.order, bar.sourceIndex, pending);
+    if(next < 0){
+      setPropagateBar(null);
+      return;
+    }
+    setPropagateBar(Object.assign({}, bar, {
+      phase:"review",
+      proposed:proposed,
+      cursor:next,
+      reviewed:[],
+      applied:0,
+      skipped:0,
+      revisionIds:[],
+      highlightIndexes:[]
+    }));
+    focusRepeat(next);
+  }
+
+  function skipReviewedChange(){
+    const bar = propagateBar;
+    if(!bar || bar.phase !== "review") return;
+    moveReview(bar, (bar.reviewed || []).concat([bar.cursor]), bar.applied || 0, (bar.skipped || 0) + 1, bar.revisionIds || [], bar.highlightIndexes || [], editedSentences, false);
+  }
+
+  function browsePropagatedChanges(){
+    const order = (propagateToast && propagateToast.appliedIndexes ? propagateToast.appliedIndexes : []).slice().sort(function(a, b){ return a - b; });
+    if(!order.length) return;
+    setPropagateToast(null);
+    setPropagateBar({
+      phase:"browse",
+      sourceIndex:order[0],
+      order:order,
+      cursor:order[0],
+      proposed:"",
+      reviewed:[],
+      applied:0,
+      skipped:0,
+      revisionIds:[]
+    });
+    focusRepeat(order[0]);
+  }
+
+  function browseNextChange(){
+    const bar = propagateBar;
+    if(!bar || bar.phase !== "browse") return;
+    const at = bar.order.indexOf(bar.cursor);
+    if(at < 0 || at >= bar.order.length - 1){
+      setPropagateBar(null);
+      return;
+    }
+    const next = bar.order[at + 1];
+    setPropagateBar(Object.assign({}, bar, {cursor:next}));
+    focusRepeat(next);
+  }
+
+  async function postPropagate(body){
+    return apiFetch("/api/revisor/jobs/"+encodeURIComponent(selectedJob.id)+"/propagate", {method:"POST", body:JSON.stringify(body)});
+  }
+
+  async function applyReviewedChange(){
+    const bar = propagateBar;
+    if(!bar || bar.phase !== "review" || applyingPropagateRef.current) return;
+    applyingPropagateRef.current = true;
+    const targets = editedSentences.slice();
+    const reviewed = (bar.reviewed || []).concat([bar.cursor]);
+    try{
+      const data = await postPropagate({
+        sources: origSentences,
+        targets: targets,
+        status: statusList(),
+        meta: sentenceMeta,
+        paraMap: sentenceParaMap,
+        sourceIndex: bar.sourceIndex,
+        previousTarget: bar.proposed,
+        newTarget: bar.proposed,
+        mode: "confirm",
+        scope: "all",
+        onlyIndexes: [bar.cursor],
+        apply: true
+      });
+      const nextTargets = data.targets || targets;
+      if(data.targets) setEditedSentences(data.targets);
+      if(data.sentenceMeta) setSentenceMeta(data.sentenceMeta);
+      if(data.sentenceStatus) setSentenceStatus(data.sentenceStatus);
+      let applied = bar.applied || 0;
+      let skipped = bar.skipped || 0;
+      const revisionIds = (bar.revisionIds || []).slice();
+      const highlightIndexes = (bar.highlightIndexes || []).slice();
+      if(data.applied){
+        applied += data.applied;
+        if(data.revisionId) revisionIds.push(data.revisionId);
+        (data.appliedIndexes || [bar.cursor]).forEach(function(index){ highlightIndexes.push(index); });
+        rememberPropagateHighlights(data.appliedIndexes || [bar.cursor], targets, bar.proposed);
+        propagatedSkipRef.current = {value:String(bar.proposed).trim(), indexes:new Set(data.appliedIndexes||[])};
+      }else{
+        skipped += 1;
+      }
+      moveReview(bar, reviewed, applied, skipped, revisionIds, highlightIndexes, nextTargets, false);
+    }catch(ex){
+      setSavedNote(ex.message || "Could not apply the repeated correction");
+    }finally{
+      releasePropagateLock();
+    }
+  }
+
+  async function applyPropagateScope(scope){
+    const bar = propagateBar;
+    if(!bar || bar.phase === "browse" || applyingPropagateRef.current) return;
+    applyingPropagateRef.current = true;
+    const targets = editedSentences.slice();
+    const reviewing = bar.phase === "review";
+    const proposed = reviewing ? bar.proposed : (targets[bar.sourceIndex] == null ? "" : targets[bar.sourceIndex]);
+    const reviewed = reviewing ? (bar.reviewed || []) : [];
+    try{
+      const data = await postPropagate({
+        sources: origSentences,
+        targets: targets,
+        status: statusList(),
+        meta: sentenceMeta,
+        paraMap: sentenceParaMap,
+        sourceIndex: bar.sourceIndex,
+        previousTarget: proposed,
+        newTarget: proposed,
+        mode: "confirm",
+        scope: scope,
+        excludeIndexes: reviewed,
+        apply: true
+      });
+      const nextTargets = data.targets || targets;
+      if(data.targets) setEditedSentences(data.targets);
+      if(data.sentenceMeta) setSentenceMeta(data.sentenceMeta);
+      if(data.sentenceStatus) setSentenceStatus(data.sentenceStatus);
+      if(data.applied){
+        rememberPropagateHighlights(data.appliedIndexes, targets, proposed);
+        propagatedSkipRef.current = {value:String(proposed).trim(), indexes:new Set(data.appliedIndexes||[])};
+      }
+      if(!reviewing){
+        setPropagateBar(null);
+        if(data.applied) setPropagateToast({count:data.applied, revisionId:data.revisionId, appliedIndexes:data.appliedIndexes||[]});
+        return;
+      }
+      const revisionIds = (bar.revisionIds || []).slice();
+      if(data.revisionId) revisionIds.push(data.revisionId);
+      const highlightIndexes = (bar.highlightIndexes || []).concat(data.appliedIndexes || []);
+      moveReview(bar, reviewed.concat(data.appliedIndexes || []), (bar.applied || 0) + (data.applied || 0), bar.skipped || 0, revisionIds, highlightIndexes, nextTargets, true);
+    }catch(ex){
+      setSavedNote(ex.message || "Could not apply the repeated correction");
+    }finally{
+      releasePropagateLock();
+    }
+  }
+
+  async function undoPropagate(){
+    const toast = propagateToast;
+    const ids = toast && toast.revisionIds && toast.revisionIds.length ? toast.revisionIds : (toast && toast.revisionId ? [toast.revisionId] : []);
+    if(!ids.length) return;
+    applyingPropagateRef.current = true;
+    try{
+      const body = ids.length === 1 ? {revisionId:ids[0]} : {revisionIds:ids};
+      const data = await apiFetch("/api/revisor/jobs/"+encodeURIComponent(selectedJob.id)+"/propagate/undo", {method:"POST", body:JSON.stringify(body)});
+      if(data.targets) setEditedSentences(data.targets);
+      if(data.sentenceMeta) setSentenceMeta(data.sentenceMeta);
+      if(data.sentenceStatus) setSentenceStatus(data.sentenceStatus);
+      const clearIndexes = toast.highlightIndexes || toast.appliedIndexes || [];
+      setPropagateHighlights(function(current){
+        const next = Object.assign({}, current);
+        clearIndexes.forEach(function(index){ delete next[index]; });
+        return next;
+      });
+      setPropagateToast(null);
+    }catch(ex){
+      setSavedNote(ex.message || "Could not undo");
+    }finally{
+      releasePropagateLock();
+    }
   }
 
   async function handleSaveDraft(){
@@ -595,14 +1254,16 @@ function ReviewEditor({selectedJob,updateJob,unclaimJob,onDone,onReleased,isComp
 
   return e("div",{style:{animation:"fadeUp 0.25s ease"}},
     e("div",{style:{display:"flex",alignItems:"center",justifyContent:"space-between",gap:10,marginBottom:10,flexWrap:"wrap"}},
-      e("span",{style:{...st.label,marginBottom:0}},selectedJob.qaOnly?"Proofread client translation":"Review & edit translation"),
+      e("span",{style:{...st.label,marginBottom:0}},selectedJob.qaOnly?"Review source and checked translation":"Review & edit translation"),
       e("div",{style:{fontSize:12,color:C.muted}},
         typeof selectedJob.sourceWordCount==="number"?selectedJob.sourceWordCount+" words · ":"",
         "payout ",payoutHint
       )
     ),
     selectedJob.qaOnly&&e("div",{style:{background:C.amberBg,border:`1px solid ${C.amberBorder}`,borderRadius:10,padding:"10px 14px",marginBottom:12,fontSize:12,color:C.amber,lineHeight:1.55}},
-      "This client submitted their own AI translation. LingoCheck already ran a hallucination scan — proofread the text below.",
+      selectedJob.customerTranslation
+        ?"The client sent a translation and the English source. Proofread the LingoCheck version against the source. Struck-out text is what the customer wrote; highlighted text is the LingoCheck change."
+        :"This client submitted their own translation. Proofread the text below.",
       selectedJob.qaFindings?.summary&&e("div",{style:{marginTop:8,opacity:0.95}},selectedJob.qaFindings.summary),
       Array.isArray(selectedJob.qaFindings?.issues)&&selectedJob.qaFindings.issues.length>0&&e("ul",{style:{margin:"8px 0 0",paddingLeft:18}},
         selectedJob.qaFindings.issues.map((issue,i)=>e("li",{key:i,style:{marginBottom:3}},
@@ -611,41 +1272,181 @@ function ReviewEditor({selectedJob,updateJob,unclaimJob,onDone,onReleased,isComp
         ))
       )
     ),
-    e("div",{style:{display:"flex",alignItems:"center",justifyContent:"space-between",margin:"0 0 10px",flexWrap:"wrap",gap:10}},
-      e("div",{style:{fontSize:12,color:C.muted,flex:isCompact?"1 1 100%":"0 0 auto"}},"Mode:"),
-      e("div",{style:{display:"flex",gap:8,flex:isCompact?"1 1 100%":"0 0 auto"}},
-        e("button",{onClick:()=>setMode("full"),style:{...st.btn,background:mode==="full"?C.lilac:"rgba(255,255,255,0.55)",border:`1px solid ${mode==="full"?"rgba(109,79,216,0.28)":C.border}`,color:mode==="full"?C.accent:C.muted,fontSize:12,padding:"6px 10px",flex:isCompact?1:"0 0 auto"}},"Full text"),
-        e("button",{onClick:()=>setMode("sentences"),style:{...st.btn,background:mode==="sentences"?C.lilac:"rgba(255,255,255,0.55)",border:`1px solid ${mode==="sentences"?"rgba(109,79,216,0.28)":C.border}`,color:mode==="sentences"?C.accent:C.muted,fontSize:12,padding:"6px 10px",flex:isCompact?1:"0 0 auto"}},"Sentence-by-sentence")
+    e("div",{style:{display:"flex",alignItems:"center",justifyContent:"flex-start",margin:"0 0 10px",flexWrap:"wrap",gap:10}},
+      e("div",{style:{display:"flex",alignItems:"center",gap:8,flex:"0 0 auto"}},
+        e("div",{style:{fontSize:12,color:C.muted}},"Mode:"),
+        e("button",{onClick:()=>setMode("full"),style:{...st.btn,background:mode==="full"?C.lilac:"rgba(255,255,255,0.55)",border:`1px solid ${mode==="full"?"rgba(109,79,216,0.28)":C.border}`,color:mode==="full"?C.accent:C.muted,fontSize:12,padding:"6px 10px"}},"Full text"),
+        e("button",{onClick:()=>setMode("sentences"),style:{...st.btn,background:mode==="sentences"?C.lilac:"rgba(255,255,255,0.55)",border:`1px solid ${mode==="sentences"?"rgba(109,79,216,0.28)":C.border}`,color:mode==="sentences"?C.accent:C.muted,fontSize:12,padding:"6px 10px"}},"Sentence-by-sentence")
+      ),
+      mode==="sentences"&&e("div",{style:{display:"flex",gap:8,alignItems:"center",marginLeft:isCompact?0:"auto"}},
+        e("span",{style:{fontSize:12,color:C.muted}},"Herhalen:"),
+        e("button",{type:"button",onMouseDown:()=>choosePropagateMode("auto"),onClick:()=>choosePropagateMode("auto"),style:{...st.btn,fontSize:12,padding:"6px 10px",background:propagateMode==="auto"?C.lilac:"rgba(255,255,255,0.55)",border:`1px solid ${propagateMode==="auto"?"rgba(109,79,216,0.28)":C.border}`,color:propagateMode==="auto"?C.accent:C.muted}},"Automatisch"),
+        e("button",{type:"button",onMouseDown:()=>choosePropagateMode("confirm"),onClick:()=>choosePropagateMode("confirm"),style:{...st.btn,fontSize:12,padding:"6px 10px",background:propagateMode==="confirm"?C.lilac:"rgba(255,255,255,0.55)",border:`1px solid ${propagateMode==="confirm"?"rgba(109,79,216,0.28)":C.border}`,color:propagateMode==="confirm"?C.accent:C.muted}},"Met bevestiging")
       )
     ),
-    mode==="full"
-      ?e("div",{style:{display:"grid",gridTemplateColumns:(isWide && !selectedJob.qaOnly)?"1fr 1fr":"1fr",gap:14,alignItems:"stretch",marginBottom:14}},
-        !selectedJob.qaOnly&&e("div",{style:{...st.card,marginBottom:0,display:"flex",flexDirection:"column"}},
-          e("div",{style:{fontSize:12,color:C.muted,marginBottom:8}},"Original — English"),
-          e("div",{style:{fontSize:13,color:C.muted,lineHeight:1.75,whiteSpace:"pre-wrap",overflow:"auto",flex:1,maxHeight:paneHeight,paddingRight:6}},selectedJob.originalText)
-        ),
-        e("div",{style:{...st.card,border:`1px solid ${C.border}`,marginBottom:0,display:"flex",flexDirection:"column"}},
-          e("div",{style:{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:10}},
-            e("div",{style:{fontSize:12,color:C.muted}},"Editable translation — ",selectedJob.language),
-            e("div",{style:{fontSize:11,color:C.muted}},"Edit freely")
+    mode==="sentences"&&e("div",{style:{fontSize:12,color:C.muted,margin:"0 0 10px",lineHeight:1.5}},
+      sentenceStatus.filter(function(s){return s==="checked";}).length," of ",editedSentences.length," checked",
+      " · Ctrl+Enter marks the part you're editing as checked"
+    ),
+    mode==="full" && selectedJob.qaOnly && selectedJob.customerTranslation
+      ?e("div",{style:{marginBottom:14}},
+          e("div",{style:{...st.card,marginBottom:0,background:"#ffffff",padding:isWide?"18px 22px 8px":"16px 16px 8px"}},
+            e("div",{style:{display:"grid",gridTemplateColumns:(isWide && jobHasEnglishSource(selectedJob))?"1fr 1fr":"1fr",columnGap:28,marginBottom:8}},
+              jobHasEnglishSource(selectedJob)&&e("div",{style:{fontSize:11,fontWeight:700,letterSpacing:"0.04em",textTransform:"uppercase",color:C.muted}},"Source — English"),
+              e("div",{style:{fontSize:11,fontWeight:700,letterSpacing:"0.04em",textTransform:"uppercase",color:C.muted}},"LingoCheck translation — ",selectedJob.language)
+            ),
+            e("div",{style:{fontSize:12,color:C.muted,lineHeight:1.45,marginBottom:4}},"Struck-out text is the customer’s wording. Highlighted text was added by LingoCheck."),
+            (function(){
+              const widePair = isWide && jobHasEnglishSource(selectedJob);
+              const prose = {fontSize:15,lineHeight:1.7,whiteSpace:"pre-wrap",margin:0};
+              if(!origSentences.length){
+                const customer = selectedJob.customerTranslation || "";
+                const ai = selectedJob.aiTranslation || "";
+                const changed = !!(customer.trim() && ai.trim() && customer.trim() !== ai.trim());
+                return e("div",{style:{display:"grid",gridTemplateColumns:widePair?"1fr 1fr":"1fr",columnGap:36,marginTop:14,alignItems:"start"}},
+                  widePair&&e("div",{style:{...prose,color:"#4e465c"}},selectedJob.originalText || ""),
+                  e("div",{style:{...prose,color:C.text,borderLeft:widePair?"1px solid rgba(42,36,56,0.08)":"none",paddingLeft:widePair?28:0}},
+                    changed ? trackChangeNodes(e, customerCorrectionParts(customer, ai)) : (ai || customer)
+                  )
+                );
+              }
+              const size = Math.max(paragraphCount || 1, 1);
+              const groups = Array.from({length:size}, function(){ return []; });
+              origSentences.forEach(function(_, idx){
+                const pi = Math.min(sentenceParaMap[idx] ?? 0, size - 1);
+                groups[pi].push(idx);
+              });
+              const passages = [];
+              groups.forEach(function(group){
+                if(!group.length) return;
+                if(group.length <= 4){ passages.push(group); return; }
+                for(let start = 0; start < group.length; start += 4) passages.push(group.slice(start, start + 4));
+              });
+              return passages.map(function(group, groupIndex){
+                const source = group.map(function(idx){ return origSentences[idx]; }).filter(Boolean).join(" ");
+                return e("div",{key:groupIndex,style:{display:"grid",gridTemplateColumns:widePair?"1fr 1fr":"1fr",columnGap:36,rowGap:6,marginTop:groupIndex?22:14,alignItems:"start"}},
+                  widePair&&e("div",{style:{...prose,color:"#4e465c"}},source),
+                  !widePair&&jobHasEnglishSource(selectedJob)&&e("div",{style:{...prose,fontSize:13,lineHeight:1.6,color:C.muted}},source),
+                  e("div",{style:{...prose,color:C.text,borderLeft:widePair?"1px solid rgba(42,36,56,0.08)":"none",paddingLeft:widePair?28:0}},
+                    group.map(function(idx, place){
+                      const customer = customerSentences[idx] || "";
+                      const ai = aiSentences[idx] || "";
+                      const changed = !!(customer.trim() && ai.trim() && customer.trim() !== ai.trim());
+                      return e(React.Fragment,{key:idx},
+                        place ? " " : null,
+                        changed ? trackChangeNodes(e, customerCorrectionParts(customer, ai)) : (ai || customer)
+                      );
+                    })
+                  )
+                );
+              });
+            })()
           ),
-          e("textarea",{style:{...st.ta,flex:1,minHeight:paneHeight||220,height:paneHeight||"auto",resize:"vertical"},value:editedText,onChange:ev=>setEditedText(ev.target.value)})
+          e("div",{style:{...st.card,marginTop:12,marginBottom:0,background:"#ffffff",padding:isWide?"16px 22px 18px":"16px"}},
+            e("div",{style:{fontSize:11,fontWeight:700,letterSpacing:"0.04em",textTransform:"uppercase",color:C.muted,marginBottom:8}},"Your edit — ",selectedJob.language),
+            e("textarea",{style:{...st.ta,minHeight:isWide?220:180,fontSize:14,lineHeight:1.6,borderRadius:12,background:"#ffffff"},value:editedText,onChange:ev=>setEditedText(ev.target.value)})
+          )
+        )
+      :mode==="full"
+      ?e("div",{style:{display:"grid",gridTemplateColumns:(isWide && jobHasEnglishSource(selectedJob))?"1fr 1fr":"1fr",gap:14,alignItems:"stretch",marginBottom:14}},
+        jobHasEnglishSource(selectedJob)&&e("div",{style:{...st.card,marginBottom:0,display:"flex",flexDirection:"column",background:"#ffffff"}},
+          e("div",{style:{fontSize:12,fontWeight:700,color:C.muted,marginBottom:8}},"Original — English"),
+          e("div",{style:{fontSize:14,color:C.text,lineHeight:1.75,whiteSpace:"pre-wrap",overflow:"auto",flex:1,maxHeight:paneHeight,paddingRight:6}},selectedJob.originalText)
+        ),
+        e("div",{style:{...st.card,marginBottom:0,display:"flex",flexDirection:"column",background:"#ffffff"}},
+          e("div",{style:{fontSize:12,fontWeight:700,color:C.muted,marginBottom:10}},"Editable translation — ",selectedJob.language),
+          e("textarea",{style:{...st.ta,flex:1,minHeight:paneHeight||220,background:"#ffffff"},value:editedText,onChange:ev=>setEditedText(ev.target.value)})
         )
       )
       :e("div",{style:{...st.card,padding:18,marginBottom:14}},
-        e("div",{style:{display:"grid",gridTemplateColumns:isWide && !selectedJob.qaOnly?"1fr 1fr":"1fr",gap:12,alignItems:"start"}},
-          !selectedJob.qaOnly&&e("div",{style:{fontSize:12,color:C.muted,marginBottom:isWide?0:6}},"Original — English"),
-          e("div",{style:{fontSize:12,color:C.muted,marginBottom:isWide?0:12}},"Editable — ",selectedJob.language)
-        ),
         origSentences.map((origSentence, idx)=>{
           const val = editedSentences[idx] ?? "";
-          return e("div",{key:idx,style:{display:"grid",gridTemplateColumns:isWide && !selectedJob.qaOnly?"1fr 1fr":"1fr",gap:12,marginTop:10,paddingTop:10,borderTop:`1px solid ${C.border}`}},
-            !selectedJob.qaOnly&&e("div",{style:{fontSize:13,color:C.muted,lineHeight:1.75,whiteSpace:"pre-wrap"}},origSentence),
-            e("textarea",{style:{...st.ta,minHeight:72},value:val,onChange:ev=>{
-              const next=[...editedSentences];
-              next[idx]=ev.target.value;
-              setEditedSentences(next);
-            }})
+          const customerSentence = customerSentences[idx] || "";
+          const aiSentence = aiSentences[idx] || "";
+          const sentenceChanged = !!(customerSentence && aiSentence && customerSentence.trim() !== aiSentence.trim());
+          const partChecked = sentenceStatus[idx] === "checked";
+          const fromId = sentenceMeta[idx] && sentenceMeta[idx].propagatedFrom;
+          const fromNumber = fromId ? (Number(String(fromId).replace(/^s/, "")) + 1) : 0;
+          const reviewHere = !!(propagateBar && (propagateBar.phase === "review" || propagateBar.phase === "browse") && propagateBar.cursor === idx);
+          const startHere = !!(propagateBar && !reviewHere && propagateBar.sourceIndex === idx && propagateBar.phase !== "review" && propagateBar.phase !== "browse");
+          const previewHere = !!(propagateBar && propagateBar.phase === "review" && propagateBar.cursor === idx);
+          const lastingHighlight = !previewHere && propagateHighlights[idx];
+          let scopeChecked = propagateBar ? propagateBar.checked : 0;
+          let scopeUnchecked = propagateBar ? propagateBar.unchecked : 0;
+          if(previewHere){
+            scopeChecked = 0;
+            scopeUnchecked = 0;
+            pendingRepeatIndexes(propagateBar.order, propagateBar.sourceIndex, editedSentences, propagateBar.proposed, propagateBar.reviewed || []).forEach(function(index){
+              if(sentenceStatus[index] === "checked") scopeChecked++;
+              else scopeUnchecked++;
+            });
+          }
+          const scopeTotal = scopeChecked + scopeUnchecked;
+          const pairColumns = sentenceColumns && jobHasEnglishSource(selectedJob);
+          const columnLabel = {fontSize:11,fontWeight:600,letterSpacing:"0.06em",textTransform:"uppercase",color:C.muted,marginBottom:6};
+          const sentenceText = {fontFamily:"inherit",fontSize:15,fontWeight:400,lineHeight:1.5,color:C.text};
+          const sourceTag = jobHasEnglishSource(selectedJob) ? "EN" : shortLang(selectedJob.language);
+          const targetTag = shortLang(selectedJob.language);
+          return e("div",{key:idx,onKeyDown:(ev)=>onSentenceKeyDown(ev,idx),style:{display:"grid",gridTemplateColumns:sentenceColumns?"36px minmax(0,1fr) auto":"36px minmax(0,1fr)",gridTemplateAreas:sentenceColumns?'"num body status"':'"num status" "body body"',columnGap:16,rowGap:8,alignItems:"start",marginTop:10,padding:"12px 14px",borderRadius:12,background:partChecked?"#e7f6ee":"#ffffff",border:partChecked?"1px solid #1f7a4d":`1px solid ${C.border}`,borderLeft:partChecked?"6px solid #1f7a4d":undefined,minWidth:0}},
+            e("div",{title:"Segment "+(idx+1),style:{gridArea:"num",width:36,height:28,borderRadius:999,display:"flex",alignItems:"center",justifyContent:"center",fontSize:12,fontWeight:700,background:partChecked?"#ffffff":C.lilac,color:partChecked?"#1f7a4d":C.accent}},String(idx+1)),
+            e("div",{style:{gridArea:"status",display:"flex",alignItems:"center",gap:8,justifySelf:"end"}},
+              fromId&&e("span",{title:"Overgenomen van segment "+fromNumber,style:{fontSize:14,color:C.accent,cursor:"default"}},"↩"),
+              e("button",{type:"button",onClick:()=>togglePartStatus(idx),style:{...st.btn,fontSize:12,fontWeight:700,padding:"6px 12px",background:partChecked?"#1f7a4d":"#ffffff",border:partChecked?"1px solid #1f7a4d":`1px solid ${C.border}`,color:partChecked?"#ffffff":C.muted}},partChecked?"✓ Checked":"Not checked")
+            ),
+            e("div",{style:{gridArea:"body",minWidth:0}},
+              e("div",{style:{display:"grid",gridTemplateColumns:pairColumns?"minmax(0,1fr) minmax(0,1fr)":"minmax(0,1fr)",gap:pairColumns?24:8,alignItems:"start",minWidth:0}},
+                jobHasEnglishSource(selectedJob)&&e("div",{style:{minWidth:0}},
+                  e("div",{style:columnLabel},sourceTag ? "Bron · "+sourceTag : "Bron"),
+                  e("div",{style:{...sentenceText,padding:"8px 12px",whiteSpace:"pre-wrap",overflowWrap:"anywhere",wordBreak:"break-word"}},origSentence)
+                ),
+                e("div",{style:{minWidth:0}},
+                  e("div",{style:columnLabel},targetTag ? "Doel · "+targetTag : "Doel"),
+                  sentenceChanged&&e("div",{style:{...sentenceText,whiteSpace:"pre-wrap",overflowWrap:"anywhere",padding:"8px 12px",marginBottom:8}},
+                    trackChangeNodes(e, customerCorrectionParts(customerSentence, aiSentence))
+                  ),
+                  (previewHere || lastingHighlight)&&e("div",{style:{...sentenceText,whiteSpace:"pre-wrap",overflowWrap:"anywhere",marginBottom:8,padding:"8px 12px",borderRadius:8,background:"#ffffff",border:"1px solid "+C.border}},
+                    propagateWordNodes(e, previewHere ? val : lastingHighlight.oldText, previewHere ? propagateBar.proposed : lastingHighlight.newText)
+                  ),
+                  e("textarea",{className:"sentence-target"+(partChecked?" is-checked":""),"data-sentence-index":idx,rows:1,style:{...sentenceText,width:"100%",boxSizing:"border-box",display:"block",margin:0,padding:"8px 12px",resize:"none",overflow:"hidden",overflowWrap:"anywhere",wordBreak:"break-word",minHeight:0},value:val,onFocus:()=>onSentenceFocus(idx,val),onBlur:(ev)=>onSentenceBlur(idx,ev),onChange:ev=>{
+                    const next=[...editedSentences];
+                    next[idx]=ev.target.value;
+                    setEditedSentences(next);
+                    growSentenceField(ev.target);
+                  }}),
+              (reviewHere || startHere)&&e("div",{style:{marginTop:8,padding:"8px 10px",borderRadius:12,background:"#ffffff",border:"1px solid "+C.border}},
+                e("div",{style:{fontSize:12,color:C.text,marginBottom:8,lineHeight:1.45}},
+                  propagateBar.phase === "browse"
+                    ? ("Wijziging "+(propagateBar.order.indexOf(idx)+1)+"/"+propagateBar.order.length)
+                    : propagateBar.phase === "review"
+                      ? ("Herhaling "+(propagateBar.order.indexOf(idx)+1)+"/"+propagateBar.order.length)
+                      : ("Deze tekst komt nog "+propagateBar.total+" keer voor ("+propagateBar.checked+" checked, "+propagateBar.unchecked+" unchecked)")
+                ),
+                e("div",{style:{display:"flex",flexWrap:"wrap",gap:8,alignItems:"center"}},
+                  propagateBar.phase === "browse"
+                    ? e(React.Fragment,null,
+                        e("button",{type:"button",onClick:browseNextChange,style:{...st.btn,fontSize:12,padding:"6px 10px",background:C.lilac,color:C.accent}},"Volgende"),
+                        e("button",{type:"button",onClick:function(){ setPropagateBar(null); },style:{...st.btn,fontSize:12,padding:"6px 10px",background:"#ffffff",color:C.muted,border:"1px solid "+C.border}},"Sluiten")
+                      )
+                    : propagateBar.phase === "review"
+                      ? e(React.Fragment,null,
+                          e("button",{type:"button",onClick:applyReviewedChange,style:{...st.btn,fontSize:12,padding:"6px 10px",background:"#1f7a4d",color:"#ffffff"}},"Apply change"),
+                          e("button",{type:"button",onClick:skipReviewedChange,style:{...st.btn,fontSize:12,padding:"6px 10px",background:"#ffffff",color:C.muted,border:"1px solid "+C.border}},"Don't apply change"),
+                          e("button",{type:"button",disabled:!scopeChecked,onClick:()=>applyPropagateScope("checked"),style:{...st.btn,fontSize:11,padding:"4px 8px",background:scopeChecked?C.accent:"#f3f1f6",color:scopeChecked?"#ffffff":C.muted,opacity:scopeChecked?1:0.55,cursor:scopeChecked?"pointer":"not-allowed"}},"Apply to checked"),
+                          e("button",{type:"button",disabled:!scopeUnchecked,onClick:()=>applyPropagateScope("unchecked"),style:{...st.btn,fontSize:11,padding:"4px 8px",background:scopeUnchecked?C.accent:"#f3f1f6",color:scopeUnchecked?"#ffffff":C.muted,opacity:scopeUnchecked?1:0.55,cursor:scopeUnchecked?"pointer":"not-allowed"}},"Apply to unchecked"),
+                          e("button",{type:"button",disabled:!scopeTotal,onClick:()=>applyPropagateScope("all"),style:{...st.btn,fontSize:11,padding:"4px 8px",background:scopeTotal?"#1f7a4d":"#f3f1f6",color:scopeTotal?"#ffffff":C.muted,opacity:scopeTotal?1:0.55,cursor:scopeTotal?"pointer":"not-allowed"}},"Apply to all")
+                        )
+                      : e(React.Fragment,null,
+                          e("button",{type:"button",onClick:jumpToNextRepeat,style:{...st.btn,fontSize:12,padding:"6px 10px",background:C.lilac,color:C.accent}},"Jump to next"),
+                          e("span",{style:{fontSize:12,fontWeight:700,color:C.muted}},propagateBar.position+"/"+propagateBar.order.length),
+                          e("button",{type:"button",disabled:!propagateBar.checked,onClick:()=>applyPropagateScope("checked"),style:{...st.btn,fontSize:12,padding:"6px 10px",background:propagateBar.checked?C.accent:"#f3f1f6",color:propagateBar.checked?"#ffffff":C.muted,opacity:propagateBar.checked?1:0.55,cursor:propagateBar.checked?"pointer":"not-allowed"}},"Apply to checked"),
+                          e("button",{type:"button",disabled:!propagateBar.unchecked,onClick:()=>applyPropagateScope("unchecked"),style:{...st.btn,fontSize:12,padding:"6px 10px",background:propagateBar.unchecked?C.accent:"#f3f1f6",color:propagateBar.unchecked?"#ffffff":C.muted,opacity:propagateBar.unchecked?1:0.55,cursor:propagateBar.unchecked?"pointer":"not-allowed"}},"Apply to unchecked"),
+                          e("button",{type:"button",disabled:!propagateBar.total,onClick:()=>applyPropagateScope("all"),style:{...st.btn,fontSize:12,padding:"6px 10px",background:propagateBar.total?"#1f7a4d":"#f3f1f6",color:propagateBar.total?"#ffffff":C.muted,opacity:propagateBar.total?1:0.55,cursor:propagateBar.total?"pointer":"not-allowed"}},"Apply to all")
+                        )
+                )
+              )
+            )
+            )
+            )
           );
         })
       ),
@@ -661,6 +1462,14 @@ function ReviewEditor({selectedJob,updateJob,unclaimJob,onDone,onReleased,isComp
       e("button",{onClick:handleRelease,disabled:releasing||sending||saving,style:{...st.btn,padding:14,background:"transparent",border:`1px solid ${C.border}`,color:C.muted,fontSize:13,whiteSpace:"nowrap"}},
         releasing?"Releasing…":"Release job"
       )
+    ),
+    propagateToast&&e("div",{style:{position:"fixed",left:"50%",bottom:24,transform:"translateX(-50%)",zIndex:40,display:"flex",alignItems:"center",gap:12,background:C.text,color:C.white,borderRadius:10,padding:"10px 14px",fontSize:13,boxShadow:"0 8px 24px rgba(0,0,0,0.18)"}},
+      e("span",null,propagateToast.kind==="round"
+        ? ((propagateToast.applied||0)+" toegepast, "+(propagateToast.skipped||0)+" overgeslagen")
+        : (propagateToast.count===1?"1 segment bijgewerkt":propagateToast.count+" segmenten bijgewerkt")),
+      propagateToast.appliedIndexes&&propagateToast.appliedIndexes.length&&e("button",{type:"button",onClick:browsePropagatedChanges,style:{...st.btn,fontSize:12,padding:"5px 10px",background:"transparent",color:C.white,border:"1px solid rgba(255,255,255,0.35)"}},"Bekijk wijzigingen"),
+      ((propagateToast.revisionIds&&propagateToast.revisionIds.length)||propagateToast.revisionId)&&e("button",{type:"button",onClick:undoPropagate,style:{...st.btn,fontSize:12,padding:"5px 10px",background:"transparent",color:C.white,border:"1px solid rgba(255,255,255,0.35)"}},"Ongedaan maken"),
+      e("button",{type:"button",title:"Sluiten",onClick:()=>setPropagateToast(null),style:{...st.btn,fontSize:16,lineHeight:1,padding:"2px 6px",background:"transparent",color:C.white,border:"none"}},"×")
     )
   );
 }
@@ -727,11 +1536,12 @@ function MyAssignmentsTab({me,allJobs,updateJob,unclaimJob,focusJobId,setFocusJo
       e("div",{style:{display:"flex",alignItems:"center",justifyContent:"space-between",gap:8,marginBottom:6}},
         e("div",{style:{fontSize:13,fontWeight:600,color:C.text,display:"flex",alignItems:"center",gap:8,flexWrap:"wrap"}},
           job.qaOnly?job.language:"EN → "+job.language,
-          job.qaOnly&&e("span",{style:{fontSize:11,fontWeight:500,color:C.muted,background:C.soft,border:`1px solid ${C.border}`,padding:"2px 8px",borderRadius:8}},"QA only")
+          job.qaOnly&&e("span",{style:{fontSize:11,fontWeight:500,color:C.muted,background:C.soft,border:`1px solid ${C.border}`,padding:"2px 8px",borderRadius:8}},"QA only"),
+          aiChangedTranslation(job)&&e("span",{style:{fontSize:11,fontWeight:500,color:C.accent,background:C.lilac,padding:"2px 8px",borderRadius:8}},"AI changes")
         ),
         e("span",{style:{fontSize:11,fontWeight:500,padding:"3px 8px",borderRadius:8,background:isComplete?C.greenBg:C.amberBg,border:`1px solid ${isComplete?C.greenBorder:C.amberBorder}`,color:isComplete?C.green:C.amber}},isComplete?"Completed":"In progress")
       ),
-      e("div",{style:{fontSize:12,color:C.muted,marginBottom:6,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}},(job.qaOnly?job.aiTranslation:job.originalText||"").substring(0,60),"…"),
+      e("div",{style:{fontSize:12,color:C.muted,marginBottom:6,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}},jobPreviewText(job).substring(0,60),"…"),
       e("div",{style:{fontSize:11,color:C.muted}},
         typeof job.sourceWordCount==="number"?job.sourceWordCount+" words · "+fmtEur(payout)+" · ":"",
         isComplete?("Completed "+formatDateTime(job.completedAt)):("Claimed "+formatDateTime(job.claimedAt))
@@ -777,18 +1587,22 @@ function MyAssignmentsTab({me,allJobs,updateJob,unclaimJob,focusJobId,setFocusJo
                   e("div",null,e("div",{style:{fontSize:12,color:C.muted}},"Claimed"),e("div",{style:{fontSize:14,color:C.text,marginTop:4}}, formatDateTime(selectedJob.claimedAt))),
                   e("div",null,e("div",{style:{fontSize:12,color:C.muted}},"Completed"),e("div",{style:{fontSize:14,color:C.text,marginTop:4}}, formatDateTime(selectedJob.completedAt)))
                 ),
-                e("div",{style:{display:"grid",gridTemplateColumns:(selectedJob.qaOnly||!isWide)?"1fr":"1fr 1fr",gap:14}},
-                  !selectedJob.qaOnly&&e("div",null,
-                    e("div",{style:{fontSize:12,color:C.muted,marginBottom:8}},"Original"),
+                e("div",{style:{display:"grid",gridTemplateColumns:(jobHasEnglishSource(selectedJob)&&isWide)?"1fr 1fr":"1fr",gap:14}},
+                  jobHasEnglishSource(selectedJob)&&e("div",null,
+                    e("div",{style:{fontSize:12,color:C.muted,marginBottom:8}},selectedJob.qaOnly?"Source — English":"Original"),
                     e("div",{style:{fontSize:13,color:C.muted,lineHeight:1.75,whiteSpace:"pre-wrap",maxHeight:300,overflow:"auto",padding:12,border:`1px solid ${C.border}`,borderRadius:10,background:C.soft}},selectedJob.originalText)
                   ),
                   e("div",null,
-                    e("div",{style:{fontSize:12,color:C.muted,marginBottom:8}},selectedJob.qaOnly?"Proofread translation":"Final translation"),
+                    e("div",{style:{fontSize:12,color:C.muted,marginBottom:8}},"Final translation"),
                     e("div",{style:{fontSize:13,color:C.text,lineHeight:1.75,whiteSpace:"pre-wrap",maxHeight:300,overflow:"auto",padding:12,border:`1px solid ${C.border}`,borderRadius:10,background:C.soft}}, selectedJob.revisedTranslation||"")
                   )
+                ),
+                selectedJob.customerTranslation&&e("div",{style:{marginTop:14,padding:12,border:`1px solid ${C.border}`,borderRadius:10,background:C.soft,maxHeight:320,overflow:"auto"}},
+                  e("div",{style:{fontSize:12,color:C.muted,marginBottom:8}},"LingoCheck changes"),
+                  e(MarkedTranslation,{customerText:selectedJob.customerTranslation,checkedText:selectedJob.aiTranslation||""})
                 )
               )
-            : e(ReviewEditor,{selectedJob,updateJob,unclaimJob,payoutRate,onDone:()=>{setJustSent(true); setTimeout(()=>setJustSent(false),3500);},onReleased:()=>{setSelectedId(null);setShowList(true);},isCompact})
+            : e(ReviewEditor,{selectedJob,updateJob,unclaimJob,payoutRate,revisorId:me.revisorId,onDone:()=>{setJustSent(true); setTimeout(()=>setJustSent(false),3500);},onReleased:()=>{setSelectedId(null);setShowList(true);},isCompact})
         )
       : (!showList && e("div",{style:st.muted},"Select an assignment to open it."))
   );
