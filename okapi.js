@@ -99,7 +99,11 @@ function resolveTikalLibDir(okapiHome) {
   return lib;
 }
 
-function getStatus() {
+let statusCache = null;
+let statusCachedAt = 0;
+const STATUS_RETRY_MS = 60 * 1000;
+
+function probeStatus() {
   const javaHome = resolveJavaHome();
   const okapiHome = resolveOkapiHome();
   const libDir = resolveTikalLibDir(okapiHome);
@@ -125,6 +129,16 @@ function getStatus() {
         ? 'Java 11+ not found. Run: npm run setup:okapi'
         : 'Okapi apps not found. Run: npm run setup:okapi'
   };
+}
+
+function getStatus() {
+  const now = Date.now();
+  if (statusCache && (statusCache.ready || now - statusCachedAt < STATUS_RETRY_MS)) {
+    return statusCache;
+  }
+  statusCache = probeStatus();
+  statusCachedAt = now;
+  return statusCache;
 }
 
 function runTikal(args, cwd) {

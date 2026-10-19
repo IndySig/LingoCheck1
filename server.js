@@ -8,6 +8,7 @@ const tls = require('tls');
 const security = require('./security');
 const okapi = require('./okapi');
 const propagate = require('./propagate');
+const filePacks = require('./file-packs');
 
 const PUBLIC_DIR = path.join(__dirname, 'public');
 const JOBS_FILE = path.join(__dirname, 'jobs.json');
@@ -819,6 +820,50 @@ function contentTypeFor(filePath) {
   }
 }
 
+function readRawBody(req, maxBytes) {
+  return new Promise((resolve, reject) => {
+    const chunks = [];
+    let size = 0;
+    req.on('data', (chunk) => {
+      size += chunk.length;
+      if (size > maxBytes) {
+        reject(new Error('Payload too large'));
+        req.destroy();
+        return;
+      }
+      chunks.push(chunk);
+    });
+    req.on('end', () => resolve(Buffer.concat(chunks, size)));
+    req.on('error', reject);
+  });
+}
+
+function humanBodyFromHeaders(req) {
+  return {
+    challengeToken: String(req.headers['x-lc-challenge'] || ''),
+    turnstileToken: String(req.headers['x-lc-turnstile'] || ''),
+    lc_hp_fax: String(req.headers['x-lc-hp'] || '')
+  };
+}
+
+function headerFileName(req) {
+  const raw = String(req.headers['x-lc-filename'] || '');
+  try {
+    return decodeURIComponent(raw).slice(0, 180) || 'document.docx';
+  } catch {
+    return 'document.docx';
+  }
+}
+
+function sendBytes(res, status, buf, contentType) {
+  res.writeHead(status, {
+    'Content-Type': contentType,
+    'Content-Length': buf.length,
+    'Cache-Control': 'no-store'
+  });
+  res.end(buf);
+}
+
 function readBodyJson(req, maxBytes = MAX_JSON_BODY) {
   return new Promise((resolve, reject) => {
     const chunks = [];
@@ -1074,6 +1119,9 @@ async function handleJobsCreate(req, res) {
   } catch (err) {
     return sendJson(res, 400, { error: err.message || 'Invalid job' });
   }
+  if (job.sourceFile && job.sourceFile.packId && !filePacks.hasPack(job.sourceFile.packId)) {
+    return sendJson(res, 400, { error: 'Upload the Word file again. The saved copy is no longer on the server.' });
+  }
   const jobs = loadJobs();
   const openForClient = jobs.filter(j => j.clientId === job.clientId && j.status !== 'complete').length;
   if (openForClient >= 20) return sendJson(res, 429, { error: 'Too many open translations for this session' });
@@ -1082,29 +1130,55 @@ async function handleJobsCreate(req, res) {
   return sendJson(res, 200, security.publicJob(job));
 }
 
-async function handleOkapiExtract(req, res) {
-  if (!enforceJsonContentType(req, res)) return;
-  if (!enforceRateLimit(req, res, 'okapi-extract', { limit: 10, windowMs: 60 * 1000 })) return;
-  const status = okapi.getStatus();
-  if (!status.ready) return sendJson(res, 503, { error: status.message, okapi: status });
-
+async function readExtractUpload(req, res) {
+  const type = String(req.headers['content-type'] || '').split(';')[0].trim().toLowerCase();
+  if (type === 'application/octet-stream') {
+    if (!(await requireHuman(req, res, humanBodyFromHeaders(req)))) return null;
+    const buf = await readRawBody(req, security.MAX_FILE_BYTES);
+    if (!buf.length) {
+      sendJson(res, 400, { error: 'File is required' });
+      return null;
+    }
+    return {
+      buf,
+      fileName: headerFileName(req),
+      language: security.sanitizeLanguage(String(req.headers['x-lc-language'] || '')) || 'Dutch'
+    };
+  }
+  if (!enforceJsonContentType(req, res)) return null;
   const body = await readBodyJson(req, MAX_OKAPI_BODY);
-  if (!(await requireHuman(req, res, body))) return;
-
-  const language = security.sanitizeLanguage(body.language) || 'Dutch';
+  if (!(await requireHuman(req, res, body))) return null;
   const fileB64 = typeof body.fileB64 === 'string' ? body.fileB64 : '';
-  const fileName = String(body.fileName || body.name || 'document.docx');
-  if (!fileB64) return sendJson(res, 400, { error: 'fileB64 is required' });
-
+  if (!fileB64) {
+    sendJson(res, 400, { error: 'fileB64 is required' });
+    return null;
+  }
   let buf;
   try {
     buf = Buffer.from(fileB64, 'base64');
   } catch {
-    return sendJson(res, 400, { error: 'Invalid file data' });
+    sendJson(res, 400, { error: 'Invalid file data' });
+    return null;
   }
   if (!buf.length || buf.length > security.MAX_FILE_BYTES) {
-    return sendJson(res, 400, { error: `File too large (max ${security.MAX_FILE_MB} MB)` });
+    sendJson(res, 400, { error: `File too large (max ${security.MAX_FILE_MB} MB)` });
+    return null;
   }
+  return {
+    buf,
+    fileName: String(body.fileName || body.name || 'document.docx'),
+    language: security.sanitizeLanguage(body.language) || 'Dutch'
+  };
+}
+
+async function handleOkapiExtract(req, res) {
+  if (!enforceRateLimit(req, res, 'okapi-extract', { limit: 10, windowMs: 60 * 1000 })) return;
+  const status = okapi.getStatus();
+  if (!status.ready) return sendJson(res, 503, { error: status.message, okapi: status });
+
+  const upload = await readExtractUpload(req, res);
+  if (!upload) return;
+  const { buf, fileName, language } = upload;
 
   try {
     const extracted = okapi.extractDocx(buf, {
@@ -1121,14 +1195,22 @@ async function handleOkapiExtract(req, res) {
     const sentenceParaMap = Array.isArray(extracted.sentenceParaMap)
       ? extracted.sentenceParaMap.slice(0, sentences.length)
       : [];
+    const packId = filePacks.savePack({
+      original: buf,
+      xliffXml: Buffer.from(extracted.xliffB64, 'base64').toString('utf8'),
+      skeletons: extracted.skeletons,
+      fileName: extracted.fileName,
+      sourceLang: extracted.sourceLang,
+      targetLang: extracted.targetLang,
+      sentenceCount: extracted.sentenceCount
+    });
     return sendJson(res, 200, {
       text,
       segments,
       sentences,
       sentenceParaMap,
       okapi: {
-        xliffB64: extracted.xliffB64,
-        skeletons: extracted.skeletons,
+        packId,
         sourceLang: extracted.sourceLang,
         targetLang: extracted.targetLang,
         fileName: extracted.fileName,
@@ -1150,41 +1232,60 @@ async function handleOkapiMerge(req, res) {
   const body = await readBodyJson(req, MAX_OKAPI_BODY);
   if (!(await requireHuman(req, res, body))) return;
 
-  const fileB64 = typeof body.fileB64 === 'string' ? body.fileB64 : '';
-  const pkg = security.sanitizeOkapiPackage(body.okapi);
   const translations = security.sanitizeSentenceList(body.translations)
     || security.sanitizeSentenceList(body.translationSentences);
   const fullText = security.sanitizeText(body.fullText || '');
-  if (!fileB64) return sendJson(res, 400, { error: 'Original DOCX is required' });
-  if (!pkg?.xliffB64) return sendJson(res, 400, { error: 'Okapi XLIFF package is required' });
   if (!translations?.length && !fullText) return sendJson(res, 400, { error: 'Translated text is required' });
 
+  if (filePacks.packIdOk(body.packId) && !filePacks.hasPack(body.packId)) {
+    return sendJson(res, 404, { error: 'Upload the Word file again. The saved copy is no longer on the server.' });
+  }
+  const stored = filePacks.packIdOk(body.packId) ? filePacks.loadPack(body.packId) : null;
   let original;
-  try {
-    original = Buffer.from(fileB64, 'base64');
-  } catch {
-    return sendJson(res, 400, { error: 'Invalid original file data' });
-  }
-  if (!original.length || original.length > security.MAX_FILE_BYTES) {
-    return sendJson(res, 400, { error: `Original file too large (max ${security.MAX_FILE_MB} MB)` });
-  }
-
   let xliffXml;
-  try {
-    xliffXml = Buffer.from(pkg.xliffB64, 'base64').toString('utf8');
-  } catch {
-    return sendJson(res, 400, { error: 'Invalid XLIFF data' });
+  let skeletons;
+  let sourceLang;
+  let targetLang;
+  let fileName;
+  if (stored) {
+    original = stored.original;
+    xliffXml = stored.xliffXml;
+    skeletons = stored.skeletons;
+    sourceLang = stored.sourceLang;
+    targetLang = stored.targetLang;
+    fileName = stored.fileName;
+  } else {
+    const fileB64 = typeof body.fileB64 === 'string' ? body.fileB64 : '';
+    const pkg = security.sanitizeOkapiPackage(body.okapi);
+    if (!fileB64) return sendJson(res, 400, { error: 'Original DOCX is required' });
+    if (!pkg?.xliffB64) return sendJson(res, 400, { error: 'Okapi XLIFF package is required' });
+    try {
+      original = Buffer.from(fileB64, 'base64');
+      xliffXml = Buffer.from(pkg.xliffB64, 'base64').toString('utf8');
+    } catch {
+      return sendJson(res, 400, { error: 'Invalid original file data' });
+    }
+    if (!original.length || original.length > security.MAX_FILE_BYTES) {
+      return sendJson(res, 400, { error: `Original file too large (max ${security.MAX_FILE_MB} MB)` });
+    }
+    skeletons = pkg.skeletons;
+    sourceLang = pkg.sourceLang;
+    targetLang = pkg.targetLang;
+    fileName = pkg.fileName || 'document.docx';
   }
 
   try {
     const out = okapi.mergeDocx(original, xliffXml, {
-      skeletons: pkg.skeletons,
-      sourceLang: pkg.sourceLang,
-      targetLang: pkg.targetLang,
-      fileName: pkg.fileName || 'document.docx',
+      skeletons,
+      sourceLang,
+      targetLang,
+      fileName: fileName || 'document.docx',
       translations: translations || undefined,
       fullText
     });
+    if (stored) {
+      return sendBytes(res, 200, out, 'application/vnd.openxmlformats-officedocument.wordprocessingml.document');
+    }
     return sendJson(res, 200, {
       fileB64: out.toString('base64'),
       mime: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',

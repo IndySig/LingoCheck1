@@ -13,3 +13,6 @@ revisors.json
 # Local binaries/tools (large files)
 .tools/
 
+# Uploaded Word files kept for download (not source)
+data/
+
