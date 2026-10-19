@@ -9,6 +9,7 @@ const security = require('./security');
 const okapi = require('./okapi');
 const propagate = require('./propagate');
 const filePacks = require('./file-packs');
+const passwordReset = require('./password-reset');
 
 const PUBLIC_DIR = path.join(__dirname, 'public');
 const JOBS_FILE = path.join(__dirname, 'jobs.json');
@@ -259,7 +260,9 @@ function publicBaseUrl(req) {
   if (configured) return configured;
   const host = String(req.headers.host || 'localhost:5001').split(',')[0].trim();
   const xfProto = String(req.headers['x-forwarded-proto'] || '').split(',')[0].trim();
-  const proto = process.env.TRUST_PROXY === '1' && xfProto === 'https' ? 'https' : 'http';
+  const forwardedHttps = process.env.TRUST_PROXY === '1' && xfProto === 'https';
+  const renderHost = /\.onrender\.com(?::\d+)?$/i.test(host);
+  const proto = forwardedHttps || renderHost ? 'https' : 'http';
   return `${proto}://${host}`;
 }
 
@@ -464,6 +467,45 @@ async function sendLoginCodeEmail(to, code) {
     console.log(`[LingoCheck] 2FA code for ${to}: ${code}`);
     return { sent: false };
   }
+}
+
+const resetEmailSentAt = new Map();
+
+async function sendPasswordResetEmail(to, link) {
+  const resendKey = String(process.env.RESEND_API_KEY || readAuthFile().RESEND_API_KEY || '').trim();
+  const smtp = loadSmtpConfig();
+  if (!resendKey && !smtp.host) {
+    console.log('[LingoCheck] Password reset for ' + maskEmail(to) + ' (email not configured). Link: ' + link);
+    return { sent: false };
+  }
+  try {
+    const from = resendKey
+      ? String(process.env.SMTP_FROM || readAuthFile().SMTP_FROM || 'LingoCheck <noreply@lingocheck.app>').trim()
+      : smtp.from;
+    await sendMail({
+      from,
+      to,
+      subject: 'Reset your LingoCheck password',
+      text: 'Use this link to choose a new LingoCheck password. It expires in 30 minutes and can be used once.\n\n' + link + '\n\nIf you did not ask for this, you can ignore this email.',
+      html: '<div style="font-family:Arial,sans-serif;max-width:480px;margin:0 auto;padding:24px;color:#1c1430">'
+        + '<p style="font-size:14px;color:#6b6480;margin:0 0 12px">LingoCheck</p>'
+        + '<h1 style="font-size:22px;font-weight:600;margin:0 0 16px">Reset your password</h1>'
+        + '<p style="font-size:15px;line-height:1.6;margin:0 0 20px">Use the link below to choose a new password. It expires in 30 minutes and can be used once.</p>'
+        + '<p style="margin:0 0 24px"><a href="' + escapeHtml(link) + '" style="display:inline-block;background:#6d4fd8;color:#ffffff;text-decoration:none;padding:12px 18px;border-radius:10px;font-weight:600">Choose a new password</a></p>'
+        + '<p style="font-size:12px;color:#6b6480;margin:0">If you did not ask for this, you can ignore this email.</p>'
+        + '</div>'
+    });
+    return { sent: true };
+  } catch (err) {
+    console.error('[LingoCheck] Failed to send password reset email:', err.message);
+    console.log('[LingoCheck] Password reset for ' + maskEmail(to) + '. Link: ' + link);
+    return { sent: false };
+  }
+}
+
+function findRevisorByEmail(email) {
+  const key = normalizeEmail(email);
+  return loadRevisors().find(r => revisorLoginKey(r) === key) || null;
 }
 
 function issueEmailOtp(revisorId) {
@@ -675,6 +717,7 @@ function issueRevisorSession(res, revisor) {
     email: revisor.email || revisor.username,
     username: revisor.email || revisor.username,
     displayName: revisor.displayName,
+    pwdAt: revisor.passwordChangedAt || 0,
     expMs: Date.now() + 1000 * 60 * 60 * 12
   });
   if (!token) return false;
@@ -715,6 +758,7 @@ function requireRevisor(req) {
   if (session.revisorId && session.revisorId !== 'legacy-admin') {
     const r = findRevisorById(session.revisorId);
     if (!r) return null;
+    if (r.passwordChangedAt && session.pwdAt !== r.passwordChangedAt) return null;
   }
   return session;
 }
@@ -1696,6 +1740,52 @@ const server = http.createServer(async (req, res) => {
       const updated = updateRevisor(r.id, { otpHash: null, otpExpiresAt: null });
       if (!issueRevisorSession(res, updated || r)) return sendJson(res, 500, { error: 'Could not create session' });
       return sendJson(res, 200, { ok: true, revisor: publicRevisor(updated || r) });
+    }
+    if (method === 'POST' && pathname === '/api/auth/forgot-password') {
+      if (!enforceJsonContentType(req, res)) return;
+      if (!enforceRateLimit(req, res, 'forgot-password', { limit: 5, windowMs: 15 * 60 * 1000 })) return;
+      const body = await readBodyJson(req, 16 * 1024);
+      const email = normalizeEmail(body.email);
+      if (!email || !isValidEmail(email)) return sendJson(res, 400, { error: 'Enter a valid email address' });
+      const revisor = findRevisorByEmail(email);
+      if (revisor) {
+        const lastSent = resetEmailSentAt.get(revisor.id) || 0;
+        if (Date.now() - lastSent >= 60 * 1000) {
+          const issued = passwordReset.createResetToken();
+          const updated = updateRevisor(revisor.id, {
+            resetTokenHash: issued.hash,
+            resetExpiresAt: issued.expiresAt
+          });
+          if (updated) {
+            resetEmailSentAt.set(revisor.id, Date.now());
+            const link = publicBaseUrl(req) + '/login?reset=' + issued.token;
+            await sendPasswordResetEmail(updated.email || email, link);
+          }
+        }
+      }
+      return sendJson(res, 200, { ok: true });
+    }
+    if (method === 'POST' && pathname === '/api/auth/reset-password') {
+      if (!enforceJsonContentType(req, res)) return;
+      if (!enforceRateLimit(req, res, 'reset-password', { limit: 10, windowMs: 15 * 60 * 1000 })) return;
+      const body = await readBodyJson(req, 16 * 1024);
+      const pw = String(body.password || '');
+      const pwErr = passwordPolicyError(pw);
+      if (pwErr) return sendJson(res, 400, { error: pwErr, checks: passwordChecks(pw) });
+      const match = passwordReset.findResetRecord(loadRevisors(), body.token);
+      if (!match) return sendJson(res, 400, { error: 'This reset link is invalid or has expired.' });
+      const salt = crypto.randomBytes(12).toString('hex');
+      const updated = updateRevisor(match.id, {
+        salt,
+        passwordHash: hashPassword(pw, salt),
+        passwordChangedAt: Date.now(),
+        resetTokenHash: null,
+        resetExpiresAt: null,
+        otpHash: null,
+        otpExpiresAt: null
+      });
+      if (!updated) return sendJson(res, 400, { error: 'This reset link is invalid or has expired.' });
+      return sendJson(res, 200, { ok: true });
     }
     if (method === 'POST' && pathname === '/api/auth/logout') {
       clearCookie(res, COOKIE_NAME);
