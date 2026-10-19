@@ -148,8 +148,11 @@ function isValidEmail(value){
   return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(String(value||"").trim());
 }
 
-let mode = "login"; // login | signup | 2fa-verify
+let mode = "login"; // login | signup | 2fa-verify | forgot | reset
 let otpInfo = null;
+let resetToken = "";
+let notice = "";
+let forgotSent = false;
 
 function shell(inner){
   return `
@@ -171,7 +174,7 @@ function renderPasswordChecklist(password){
   }).join("")}</ul>`;
 }
 
-function bindPasswordChecklist(input){
+function bindPasswordChecklist(input, confirmInput){
   const update=()=>{
     const checks=passwordChecks(input.value);
     document.querySelectorAll(".pw-list li").forEach(li=>{
@@ -181,10 +184,18 @@ function bindPasswordChecklist(input){
       if(dot) dot.textContent=ok?"✓":"";
     });
     const btn=qs("#btn");
-    if(btn && mode==="signup") btn.disabled=!isStrongPassword(input.value);
+    if(btn && (mode==="signup" || mode==="reset")){
+      const strong=isStrongPassword(input.value);
+      const match=!confirmInput || (confirmInput.value.length>0 && confirmInput.value===input.value);
+      btn.disabled=!(strong && match);
+    }
   };
   input.addEventListener("input", update);
   input.addEventListener("keyup", update);
+  if(confirmInput){
+    confirmInput.addEventListener("input", update);
+    confirmInput.addEventListener("keyup", update);
+  }
   update();
 }
 
@@ -213,8 +224,52 @@ function render(){
     return;
   }
 
+  if(mode==="forgot"){
+    root.innerHTML = shell(forgotSent ? `
+      <div class="lc-display" style="font-size:28px;font-weight:400;color:${C.text};margin-bottom:8px;letter-spacing:-0.02em">Check your email</div>
+      <div style="${styleStr(st.muted)};margin-bottom:18px">If that email is registered, we sent a reset link. It expires in 30 minutes and works once.</div>
+      <button id="back" style="${styleStr(st.btn)};width:100%;padding:10px;background:transparent;border:none;color:${C.muted};font-size:13px">← Back to login</button>
+    ` : `
+      <div class="lc-display" style="font-size:28px;font-weight:400;color:${C.text};margin-bottom:8px;letter-spacing:-0.02em">Reset your password</div>
+      <div style="${styleStr(st.muted)};margin-bottom:18px">Enter the email on your revisor account. If it is registered, we will send a reset link.</div>
+      <label style="${styleStr(st.label)}" for="email">Email</label>
+      <input id="email" type="email" inputmode="email" autocomplete="email" required style="${styleStr(st.inp)}" placeholder="you@example.com" />
+      <div id="err" style="display:none;margin-top:14px;font-size:12px;color:#c43d3d"></div>
+      <button id="btn" class="primary" style="margin-top:18px;${styleStr(st.btn)};width:100%;padding:15px;background:${C.accent};font-size:15px;color:${C.white}">Send reset link</button>
+      <button id="back" style="margin-top:8px;${styleStr(st.btn)};width:100%;padding:10px;background:transparent;border:none;color:${C.muted};font-size:13px">← Back to login</button>
+    `);
+    qs("#back").addEventListener("click", ()=>{ mode="login"; forgotSent=false; render(); });
+    if(!forgotSent) bindForgot();
+    return;
+  }
+
+  if(mode==="reset"){
+    root.innerHTML = shell(`
+      <div class="lc-display" style="font-size:28px;font-weight:400;color:${C.text};margin-bottom:8px;letter-spacing:-0.02em">Choose a new password</div>
+      <div style="${styleStr(st.muted)};margin-bottom:18px">This link works once and expires 30 minutes after it was sent.</div>
+      <label style="${styleStr(st.label)}" for="p">New password</label>
+      <input id="p" type="password" autocomplete="new-password" style="${styleStr(st.inp)}" placeholder="Create a strong password" />
+      <div style="height:12px"></div>
+      <label style="${styleStr(st.label)}" for="p2">Confirm password</label>
+      <input id="p2" type="password" autocomplete="new-password" style="${styleStr(st.inp)}" placeholder="Repeat the new password" />
+      ${renderPasswordChecklist("")}
+      <div id="err" style="display:none;margin-top:14px;font-size:12px;color:#c43d3d"></div>
+      <button id="btn" class="primary" disabled style="margin-top:18px;${styleStr(st.btn)};width:100%;padding:15px;background:${C.accent};font-size:15px;color:${C.white}">Save new password</button>
+      <button id="back" style="margin-top:8px;${styleStr(st.btn)};width:100%;padding:10px;background:transparent;border:none;color:${C.muted};font-size:13px">← Back to login</button>
+    `);
+    qs("#back").addEventListener("click", ()=>{
+      mode="login";
+      resetToken="";
+      history.replaceState({}, "", "/login");
+      render();
+    });
+    bindReset();
+    return;
+  }
+
   const isLogin = mode === "login";
   root.innerHTML = shell(`
+        ${notice && isLogin ? `<div style="margin-bottom:14px;font-size:13px;line-height:1.5;color:${C.green};background:${C.greenBg};border:1px solid ${C.greenBorder};border-radius:16px;padding:12px 14px">${notice}</div>` : ""}
         <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px">
           <div class="lc-display" style="font-size:28px;font-weight:400;color:${C.text};letter-spacing:-0.02em;line-height:1.15">${isLogin?"Welcome back":"Join as a revisor"}</div>
         </div>
@@ -239,6 +294,7 @@ function render(){
 
         <label style="${styleStr(st.label)}" for="p">Password</label>
         <input id="p" type="password" autocomplete="${isLogin?"current-password":"new-password"}" style="${styleStr(st.inp)}" placeholder="${isLogin?"Enter your password":"Create a strong password"}" />
+        ${isLogin ? `<button id="forgot" type="button" style="margin-top:10px;${styleStr(st.btn)};background:transparent;border:none;padding:0;color:${C.accent};font-size:13px;font-weight:600">Forgot password?</button>` : ""}
         ${renderPasswordChecklist("")}
 
         <div id="err" style="display:none;margin-top:14px;font-size:12px;color:#c43d3d"></div>
@@ -255,6 +311,8 @@ function render(){
   const dn=qs("#dn");
 
   qs("#tabLogin").addEventListener("click", ()=>{ mode="login"; render(); });
+  const forgot=qs("#forgot");
+  if(forgot) forgot.addEventListener("click", ()=>{ mode="forgot"; notice=""; forgotSent=false; render(); });
   qs("#tabSignup").addEventListener("click", ()=>{ mode="signup"; render(); });
   bindPasswordChecklist(p);
 
@@ -357,7 +415,83 @@ function bindVerify(){
   code.focus();
 }
 
+function bindForgot(){
+  const email=qs("#email"), err=qs("#err"), btn=qs("#btn");
+  function showError(message){
+    err.textContent=message;
+    err.style.display="block";
+  }
+  async function submit(){
+    err.style.display="none";
+    const emailValue=(email.value||"").trim();
+    if(!emailValue || !isValidEmail(emailValue)){
+      showError("Enter a valid email address.");
+      email.focus();
+      return;
+    }
+    btn.disabled=true;
+    btn.textContent="Sending…";
+    try{
+      await apiFetch("/api/auth/forgot-password",{method:"POST",body:JSON.stringify({email:emailValue})});
+      forgotSent=true;
+      render();
+    }catch(e){
+      showError(e.message);
+      btn.disabled=false;
+      btn.textContent="Send reset link";
+    }
+  }
+  btn.addEventListener("click", submit);
+  email.addEventListener("keydown", ev=>{ if(ev.key==="Enter") submit(); });
+  email.focus();
+}
+
+function bindReset(){
+  const p=qs("#p"), p2=qs("#p2"), err=qs("#err"), btn=qs("#btn");
+  bindPasswordChecklist(p, p2);
+  function showError(message){
+    err.textContent=message;
+    err.style.display="block";
+  }
+  async function submit(){
+    err.style.display="none";
+    if(!isStrongPassword(p.value)){
+      showError("Password does not meet all requirements yet.");
+      p.focus();
+      return;
+    }
+    if(p.value!==p2.value){
+      showError("Passwords do not match.");
+      p2.focus();
+      return;
+    }
+    btn.disabled=true;
+    btn.textContent="Saving…";
+    try{
+      await apiFetch("/api/auth/reset-password",{method:"POST",body:JSON.stringify({token:resetToken,password:p.value})});
+      resetToken="";
+      notice="Password updated. Sign in with your new password.";
+      mode="login";
+      history.replaceState({}, "", "/login");
+      render();
+    }catch(e){
+      showError(e.message);
+      btn.disabled=!isStrongPassword(p.value) || p.value!==p2.value;
+      btn.textContent="Save new password";
+    }
+  }
+  btn.addEventListener("click", submit);
+  p2.addEventListener("keydown", ev=>{ if(ev.key==="Enter") submit(); });
+}
+
 async function boot(){
+  const reset=new URLSearchParams(location.search).get("reset")||"";
+  if(/^[a-f0-9]{64}$/.test(reset)){
+    mode="reset";
+    resetToken=reset;
+    render();
+    return;
+  }
   try{
     const me=await apiFetch("/api/auth/me",{method:"GET"});
     if(me.authenticated){ location.href="/revisor"; return; }
