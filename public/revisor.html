@@ -356,6 +356,14 @@ function MarkedTranslation({customerText, checkedText}){
   );
 }
 
+function sourceName(job){
+  const name = String(job && job.sourceLanguage || "English");
+  return ["English","Dutch","Spanish","German"].includes(name) ? name : "English";
+}
+function pairLabel(job){
+  if(!job) return "";
+  return shortLang(sourceName(job))+" → "+(job.language||"");
+}
 function shortLang(language){
   const name = String(language || "").trim().toLowerCase();
   const known = {dutch:"NL",nederlands:"NL",english:"EN",german:"DE",deutsch:"DE",french:"FR",spanish:"ES",italian:"IT",portuguese:"PT"};
@@ -594,7 +602,7 @@ function QueueTab({me,allJobs,claimJob,setTab,setFocusJobId,isCompact,payoutRate
           return e("div",{key:job.id,style:{...st.card,padding:isCompact?16:18,animation:"fadeUp 0.25s ease",display:"grid",gridTemplateColumns:isCompact?"1fr":"1fr auto",gap:16,alignItems:isCompact?"stretch":"center"}},
             e("div",null,
               e("div",{style:{fontSize:13,fontWeight:600,color:C.text,marginBottom:6,display:"flex",alignItems:"center",gap:8,flexWrap:"wrap"}},
-                job.qaOnly?job.language:"EN → "+job.language,
+                pairLabel(job),
                 job.qaOnly&&e("span",{style:{fontSize:11,fontWeight:500,color:C.muted,background:C.soft,border:`1px solid ${C.border}`,padding:"2px 8px",borderRadius:8}},"QA only"),
                 aiChangedTranslation(job)&&e("span",{style:{fontSize:11,fontWeight:500,color:C.accent,background:C.lilac,border:"1px solid rgba(109,79,216,0.28)",padding:"2px 8px",borderRadius:8}},"AI changes"),
                 stale&&e("span",{style:{fontSize:11,fontWeight:500,color:C.amber,background:C.amberBg,border:`1px solid ${C.amberBorder}`,padding:"2px 8px",borderRadius:8}},"Stale — reclaim"),
@@ -1262,7 +1270,7 @@ function ReviewEditor({selectedJob,updateJob,unclaimJob,onDone,onReleased,isComp
     ),
     selectedJob.qaOnly&&e("div",{style:{background:C.amberBg,border:`1px solid ${C.amberBorder}`,borderRadius:10,padding:"10px 14px",marginBottom:12,fontSize:12,color:C.amber,lineHeight:1.55}},
       selectedJob.customerTranslation
-        ?"The client sent a translation and the English source. Proofread the LingoCheck version against the source. Struck-out text is what the customer wrote; highlighted text is the LingoCheck change."
+        ?"The client sent a translation and the "+sourceName(selectedJob)+" source. Proofread the LingoCheck version against the source. Struck-out text is what the customer wrote; highlighted text is the LingoCheck change."
         :"This client submitted their own translation. Proofread the text below.",
       selectedJob.qaFindings?.summary&&e("div",{style:{marginTop:8,opacity:0.95}},selectedJob.qaFindings.summary),
       Array.isArray(selectedJob.qaFindings?.issues)&&selectedJob.qaFindings.issues.length>0&&e("ul",{style:{margin:"8px 0 0",paddingLeft:18}},
@@ -1292,7 +1300,7 @@ function ReviewEditor({selectedJob,updateJob,unclaimJob,onDone,onReleased,isComp
       ?e("div",{style:{marginBottom:14}},
           e("div",{style:{...st.card,marginBottom:0,background:"#ffffff",padding:isWide?"18px 22px 8px":"16px 16px 8px"}},
             e("div",{style:{display:"grid",gridTemplateColumns:(isWide && jobHasEnglishSource(selectedJob))?"1fr 1fr":"1fr",columnGap:28,marginBottom:8}},
-              jobHasEnglishSource(selectedJob)&&e("div",{style:{fontSize:11,fontWeight:700,letterSpacing:"0.04em",textTransform:"uppercase",color:C.muted}},"Source — English"),
+              jobHasEnglishSource(selectedJob)&&e("div",{style:{fontSize:11,fontWeight:700,letterSpacing:"0.04em",textTransform:"uppercase",color:C.muted}},"Source — ",sourceName(selectedJob)),
               e("div",{style:{fontSize:11,fontWeight:700,letterSpacing:"0.04em",textTransform:"uppercase",color:C.muted}},"LingoCheck translation — ",selectedJob.language)
             ),
             e("div",{style:{fontSize:12,color:C.muted,lineHeight:1.45,marginBottom:4}},"Struck-out text is the customer’s wording. Highlighted text was added by LingoCheck."),
@@ -1385,7 +1393,7 @@ function ReviewEditor({selectedJob,updateJob,unclaimJob,onDone,onReleased,isComp
           const pairColumns = sentenceColumns && jobHasEnglishSource(selectedJob);
           const columnLabel = {fontSize:11,fontWeight:600,letterSpacing:"0.06em",textTransform:"uppercase",color:C.muted,marginBottom:6};
           const sentenceText = {fontFamily:"inherit",fontSize:15,fontWeight:400,lineHeight:1.5,color:C.text};
-          const sourceTag = jobHasEnglishSource(selectedJob) ? "EN" : shortLang(selectedJob.language);
+          const sourceTag = jobHasEnglishSource(selectedJob) ? shortLang(sourceName(selectedJob)) : shortLang(selectedJob.language);
           const targetTag = shortLang(selectedJob.language);
           return e("div",{key:idx,onKeyDown:(ev)=>onSentenceKeyDown(ev,idx),style:{display:"grid",gridTemplateColumns:sentenceColumns?"36px minmax(0,1fr) auto":"36px minmax(0,1fr)",gridTemplateAreas:sentenceColumns?'"num body status"':'"num status" "body body"',columnGap:16,rowGap:8,alignItems:"start",marginTop:10,padding:"12px 14px",borderRadius:12,background:partChecked?"#e7f6ee":"#ffffff",border:partChecked?"1px solid #1f7a4d":`1px solid ${C.border}`,borderLeft:partChecked?"6px solid #1f7a4d":undefined,minWidth:0}},
             e("div",{title:"Segment "+(idx+1),style:{gridArea:"num",width:36,height:28,borderRadius:999,display:"flex",alignItems:"center",justifyContent:"center",fontSize:12,fontWeight:700,background:partChecked?"#ffffff":C.lilac,color:partChecked?"#1f7a4d":C.accent}},String(idx+1)),
@@ -1418,7 +1426,7 @@ function ReviewEditor({selectedJob,updateJob,unclaimJob,onDone,onReleased,isComp
                   propagateBar.phase === "browse"
                     ? ("Wijziging "+(propagateBar.order.indexOf(idx)+1)+"/"+propagateBar.order.length)
                     : propagateBar.phase === "review"
-                      ? ("Herhaling "+(propagateBar.order.indexOf(idx)+1)+"/"+propagateBar.order.length)
+                      ? ("Occurrence "+(propagateBar.order.indexOf(idx)+1)+"/"+propagateBar.order.length+" · Segment "+(idx+1))
                       : ("Deze tekst komt nog "+propagateBar.total+" keer voor ("+propagateBar.checked+" checked, "+propagateBar.unchecked+" unchecked)")
                 ),
                 e("div",{style:{display:"flex",flexWrap:"wrap",gap:8,alignItems:"center"}},
@@ -1437,7 +1445,7 @@ function ReviewEditor({selectedJob,updateJob,unclaimJob,onDone,onReleased,isComp
                         )
                       : e(React.Fragment,null,
                           e("button",{type:"button",onClick:jumpToNextRepeat,style:{...st.btn,fontSize:12,padding:"6px 10px",background:C.lilac,color:C.accent}},"Jump to next"),
-                          e("span",{style:{fontSize:12,fontWeight:700,color:C.muted}},propagateBar.position+"/"+propagateBar.order.length),
+                          e("span",{style:{fontSize:12,fontWeight:700,color:C.muted}},"Occurrence "+propagateBar.position+"/"+propagateBar.order.length+" · Segment "+(idx+1)),
                           e("button",{type:"button",disabled:!propagateBar.checked,onClick:()=>applyPropagateScope("checked"),style:{...st.btn,fontSize:12,padding:"6px 10px",background:propagateBar.checked?C.accent:"#f3f1f6",color:propagateBar.checked?"#ffffff":C.muted,opacity:propagateBar.checked?1:0.55,cursor:propagateBar.checked?"pointer":"not-allowed"}},"Apply to checked"),
                           e("button",{type:"button",disabled:!propagateBar.unchecked,onClick:()=>applyPropagateScope("unchecked"),style:{...st.btn,fontSize:12,padding:"6px 10px",background:propagateBar.unchecked?C.accent:"#f3f1f6",color:propagateBar.unchecked?"#ffffff":C.muted,opacity:propagateBar.unchecked?1:0.55,cursor:propagateBar.unchecked?"pointer":"not-allowed"}},"Apply to unchecked"),
                           e("button",{type:"button",disabled:!propagateBar.total,onClick:()=>applyPropagateScope("all"),style:{...st.btn,fontSize:12,padding:"6px 10px",background:propagateBar.total?"#1f7a4d":"#f3f1f6",color:propagateBar.total?"#ffffff":C.muted,opacity:propagateBar.total?1:0.55,cursor:propagateBar.total?"pointer":"not-allowed"}},"Apply to all")
@@ -1535,7 +1543,7 @@ function MyAssignmentsTab({me,allJobs,updateJob,unclaimJob,focusJobId,setFocusJo
     return e("div",{key:job.id,onClick:()=>setSelectedId(job.id),style:{...st.card,padding:14,marginBottom:8,cursor:"pointer",border:`1px solid ${isSelected?"rgba(109,79,216,0.32)":C.border}`,background:isSelected?"rgba(109,79,216,0.06)":undefined,transition:"border-color 0.12s, background 0.12s",animation:"fadeUp 0.25s ease"}},
       e("div",{style:{display:"flex",alignItems:"center",justifyContent:"space-between",gap:8,marginBottom:6}},
         e("div",{style:{fontSize:13,fontWeight:600,color:C.text,display:"flex",alignItems:"center",gap:8,flexWrap:"wrap"}},
-          job.qaOnly?job.language:"EN → "+job.language,
+          pairLabel(job),
           job.qaOnly&&e("span",{style:{fontSize:11,fontWeight:500,color:C.muted,background:C.soft,border:`1px solid ${C.border}`,padding:"2px 8px",borderRadius:8}},"QA only"),
           aiChangedTranslation(job)&&e("span",{style:{fontSize:11,fontWeight:500,color:C.accent,background:C.lilac,padding:"2px 8px",borderRadius:8}},"AI changes")
         ),
@@ -1582,14 +1590,14 @@ function MyAssignmentsTab({me,allJobs,updateJob,unclaimJob,focusJobId,setFocusJo
                   e("span",{style:{fontSize:11,fontWeight:500,padding:"4px 10px",borderRadius:8,background:C.greenBg,border:`1px solid ${C.greenBorder}`,color:C.green}},"Delivered")
                 ),
                 e("div",{style:{display:"grid",gridTemplateColumns:isCompact?"1fr":"1fr 1fr",gap:12,marginBottom:18}},
-                  e("div",null,e("div",{style:{fontSize:12,color:C.muted}},"Language"),e("div",{style:{fontSize:14,color:C.text,marginTop:4}}, selectedJob.qaOnly?selectedJob.language:"EN → "+selectedJob.language)),
+                  e("div",null,e("div",{style:{fontSize:12,color:C.muted}},"Language"),e("div",{style:{fontSize:14,color:C.text,marginTop:4}}, pairLabel(selectedJob))),
                   e("div",null,e("div",{style:{fontSize:12,color:C.muted}},"Words / payout"),e("div",{style:{fontSize:14,color:C.text,marginTop:4}}, (selectedJob.sourceWordCount||0)," · ",fmtEur(jobPayoutCents(selectedJob,payoutRate)))),
                   e("div",null,e("div",{style:{fontSize:12,color:C.muted}},"Claimed"),e("div",{style:{fontSize:14,color:C.text,marginTop:4}}, formatDateTime(selectedJob.claimedAt))),
                   e("div",null,e("div",{style:{fontSize:12,color:C.muted}},"Completed"),e("div",{style:{fontSize:14,color:C.text,marginTop:4}}, formatDateTime(selectedJob.completedAt)))
                 ),
                 e("div",{style:{display:"grid",gridTemplateColumns:(jobHasEnglishSource(selectedJob)&&isWide)?"1fr 1fr":"1fr",gap:14}},
                   jobHasEnglishSource(selectedJob)&&e("div",null,
-                    e("div",{style:{fontSize:12,color:C.muted,marginBottom:8}},selectedJob.qaOnly?"Source — English":"Original"),
+                    e("div",{style:{fontSize:12,color:C.muted,marginBottom:8}},selectedJob.qaOnly?("Source — "+sourceName(selectedJob)):"Original"),
                     e("div",{style:{fontSize:13,color:C.muted,lineHeight:1.75,whiteSpace:"pre-wrap",maxHeight:300,overflow:"auto",padding:12,border:`1px solid ${C.border}`,borderRadius:10,background:C.soft}},selectedJob.originalText)
                   ),
                   e("div",null,
@@ -1620,7 +1628,7 @@ function FinanceTab({me,allJobs,isCompact,payoutRate}){
   const items = useMemo(()=>completed.map(j=>{
     const words = typeof j.sourceWordCount==="number" ? j.sourceWordCount : 0;
     const earningsCents = jobPayoutCents(j, RATE);
-    return {id:j.id,language:j.language,completedAt:j.completedAt||j.createdAt,sourceWordCount:words,earningsCents};
+    return {id:j.id,language:j.language,sourceLanguage:j.sourceLanguage,completedAt:j.completedAt||j.createdAt,sourceWordCount:words,earningsCents};
   }),[completed,RATE]);
 
   const totalCents = items.reduce((a,b)=>a+b.earningsCents,0);
@@ -1676,7 +1684,7 @@ function FinanceTab({me,allJobs,isCompact,payoutRate}){
             ),
             e("div",{style:{padding:"4px 0"}},
               g.items.map((it,i)=>e("div",{key:it.id,style:{display:"grid",gridTemplateColumns:isCompact?"1fr":"1fr 120px 100px 110px",gap:isCompact?4:8,padding:isCompact?"12px 16px":"10px 20px",borderTop:i===0?"none":`1px solid ${C.border}`,fontSize:13,alignItems:isCompact?"start":"center"}},
-                e("div",{style:{color:C.text}},"EN → ",it.language),
+                e("div",{style:{color:C.text}},pairLabel(it)),
                 e("div",{style:{color:C.muted,fontSize:12}}, it.sourceWordCount," words"),
                 e("div",{style:{color:C.muted,fontSize:12}}, new Date(it.completedAt).toLocaleDateString()),
                 e("div",{style:{color:C.pale,textAlign:isCompact?"left":"right",fontWeight:600}}, fmtEur(it.earningsCents))

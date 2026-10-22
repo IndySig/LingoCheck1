@@ -207,8 +207,9 @@ function render(){
       <div class="lc-display" style="font-size:28px;font-weight:400;color:${C.text};margin-bottom:8px;letter-spacing:-0.02em">Check your email</div>
       <div style="${styleStr(st.muted)};margin-bottom:18px">We sent a 6-digit code to <strong style="color:${C.text}">${otpInfo?.emailMasked || "your email"}</strong>. Enter it below — it expires in 10 minutes.</div>
       ${delivered?"":`
+      ${codeNote && delivered ? `<div style="margin-bottom:14px;font-size:13px;line-height:1.5;color:${C.green};background:${C.greenBg};border:1px solid ${C.greenBorder};border-radius:16px;padding:12px 14px">${codeNote}</div>` : ""}
         <div class="code-box">
-          <div style="font-size:12px;font-weight:500;color:${C.muted}">Email isn’t set up yet — use this code</div>
+          <div style="font-size:12px;font-weight:500;color:${C.muted}">${codeNote || "The code could not be emailed. Use this code."}</div>
           <div class="digits" id="shownCode">${otpInfo?.code || "••••••"}</div>
         </div>
       `}
@@ -220,6 +221,7 @@ function render(){
       <button id="back" style="margin-top:8px;${styleStr(st.btn)};width:100%;padding:10px;background:transparent;border:none;color:${C.muted};font-size:13px">← Back to login</button>
     `);
     qs("#back").addEventListener("click", ()=>{ mode="login"; otpInfo=null; render(); });
+    qs("#back").addEventListener("click", ()=>{ mode="login"; otpInfo=null; codeNote=""; render(); });
     bindVerify();
     return;
   }
@@ -350,13 +352,13 @@ function render(){
     try{
       if(isLogin){
         const data=await apiFetch("/api/auth/login",{method:"POST",body:JSON.stringify({email:emailValue,password})});
-        if(data.requires2fa){ otpInfo={code:data.code, emailMasked:data.emailMasked, delivered:!!data.delivered}; mode="2fa-verify"; render(); return; }
+        if(data.requires2fa){ otpInfo={code:data.code, emailMasked:data.emailMasked, delivered:!!data.delivered}; codeNote=""; mode="2fa-verify"; render(); return; }
         location.href="/revisor";
         return;
       }
       const data=await apiFetch("/api/auth/signup",{method:"POST",body:JSON.stringify({email:emailValue,displayName:(dn?.value||"").trim(),password})});
       otpInfo={code:data.code, emailMasked:data.emailMasked, delivered:!!data.delivered};
-      mode="2fa-verify";
+      codeNote="";
       render();
     }catch(e){
       showError(e.message);
@@ -399,9 +401,11 @@ function bindVerify(){
     err.style.display="none";
     resend.disabled=true;
     try{
+    resend.textContent="Sending…";
+    try{
       const data=await apiFetch("/api/auth/2fa/resend",{method:"POST",body:"{}"});
       otpInfo={code:data.code, emailMasked:data.emailMasked, delivered:!!data.delivered};
-      mode="2fa-verify";
+      codeNote=data.delivered ? "A new code is on its way." : "We couldn't email the new code. Use the code below.";
       render();
     }catch(e){
       showError(e.message);

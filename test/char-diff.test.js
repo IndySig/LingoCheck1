@@ -81,6 +81,23 @@ test("several changes in one sentence", function () {
   assert.equal(newTextOf(parts), newText);
 });
 
+test("curly and straight quotation marks are not a change", function () {
+  const oldText = "\u201CBij iedere bak hoorde een ander verhaal\u201D, vertelt ze.";
+  const newText = '"Bij iedere bak hoorde een ander verhaal", vertelt ze.';
+  const parts = charDiff(oldText, newText);
+  assert.deepEqual(parts, [{ type: "equal", text: oldText }]);
+});
+
+test("a real edit stays visible beside an ignored quote change", function () {
+  const parts = charDiff("\u201CDe hond zat.\u201D", '"De kat zat."');
+  assert.deepEqual(parts, [
+    { type: "equal", text: "\u201CDe " },
+    { type: "removed", text: "hond" },
+    { type: "added", text: "kat" },
+    { type: "equal", text: " zat.\u201D" },
+  ]);
+});
+
 test("punctuation at the end", function () {
   const parts = charDiff("boodschappenlijst.", "boodschappenlijst!");
   assert.deepEqual(parts, [

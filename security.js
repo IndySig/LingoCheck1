@@ -5,7 +5,7 @@ const os = require('os');
 const path = require('path');
 const { spawnSync } = require('child_process');
 
-const ALLOWED_LANGUAGES = Object.freeze(['Dutch', 'Spanish', 'German']);
+const ALLOWED_LANGUAGES = Object.freeze(['English', 'Dutch', 'Spanish', 'German']);
 const MAX_TEXT_CHARS = 25000;
 const MAX_CLIENT_ID_LEN = 64;
 const MAX_FILENAME_LEN = 180;
@@ -304,6 +304,7 @@ function publicJob(job) {
     originalText: job.originalText,
     originalSegments: Array.isArray(job.originalSegments) ? job.originalSegments : null,
     language: job.language,
+    sourceLanguage: sanitizeLanguage(job.sourceLanguage) || 'English',
     aiTranslation: job.aiTranslation,
     qaOnly: !!job.qaOnly,
     qaFindings: job.status === 'complete' ? sanitizeQaFindings(job.qaFindings) : null,
@@ -315,6 +316,8 @@ function publicJob(job) {
     sourceFile,
     clientEmailMasked: job.clientEmail ? maskEmail(job.clientEmail) : null
   };
+  const bundleId = sanitizeBundleId(job.bundleId);
+  if (bundleId) out.bundleId = bundleId;
   // Needed for Okapi merge after human review (sentence count must match XLIFF).
   if (job.status === 'complete') {
     out.sourceSentences = Array.isArray(job.sourceSentences) ? job.sourceSentences : null;
@@ -531,11 +534,18 @@ async function assertHuman(req, body, { secret, turnstile }) {
   return { ok: true };
 }
 
+function sanitizeBundleId(value) {
+  const id = String(value || '').trim();
+  return /^b_[a-f0-9]{16}$/.test(id) ? id : null;
+}
+
 function buildClientJob(body, pricing = {}) {
   const clientId = sanitizeClientId(body.clientId);
   if (!clientId) throw new Error('Invalid client session');
   const language = sanitizeLanguage(body.language);
   if (!language) throw new Error('Unsupported language');
+  const sourceLanguage = sanitizeLanguage(body.sourceLanguage) || 'English';
+  if (sourceLanguage === language) throw new Error('Source and translation language must be different');
   const clientEmail = sanitizeEmail(body.clientEmail);
   if (!clientEmail) throw new Error('A delivery email is required');
   const qaOnly = body.qaOnly === true;
@@ -547,7 +557,7 @@ function buildClientJob(body, pricing = {}) {
   const aiTranslation = sanitizeText(body.aiTranslation || (qaOnly ? body.customerTranslation : ''));
   const customerTranslation = qaOnly ? sanitizeText(body.customerTranslation || '') : '';
   if (qaOnly) {
-    if (!originalText) throw new Error('The English source file is required');
+    if (!originalText) throw new Error('The source file is required');
     if (!customerTranslation) throw new Error('Translation is required');
     if (!aiTranslation) throw new Error('Translation is required');
   } else {
@@ -587,6 +597,7 @@ function buildClientJob(body, pricing = {}) {
   const ratePayout = Number.isFinite(payoutPerWordCents) && payoutPerWordCents > 0 ? payoutPerWordCents : 2.5;
   const priceCents = Math.round(sourceWordCount * rateClient * 100);
   const payoutCents = Math.round(sourceWordCount * ratePayout);
+  const bundleId = sanitizeBundleId(body.bundleId);
 
   return {
     id: 'j_' + crypto.randomBytes(12).toString('hex'),
@@ -600,8 +611,10 @@ function buildClientJob(body, pricing = {}) {
     translationSentences,
     sentenceParaMap,
     language,
+    sourceLanguage,
     aiTranslation: finalAi,
     customerTranslation: qaOnly ? customerTranslation : null,
+    bundleId,
     qaOnly,
     qaFindings: qaOnly ? sanitizeQaFindings(body.qaFindings) : null,
     status: 'awaiting_review',

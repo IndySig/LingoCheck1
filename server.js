@@ -532,9 +532,9 @@ function verifyEmailOtp(revisor, code) {
   return crypto.timingSafeEqual(a, b);
 }
 
-async function startEmailTwoFactor(res, revisor) {
+async function startEmailTwoFactor(req, res, revisor) {
   const otp = issueEmailOtp(revisor.id);
-  if (!otp || !issuePending2fa(res, revisor)) return null;
+  if (!otp || !issuePending2fa(req, res, revisor)) return null;
   const mail = await sendLoginCodeEmail(otp.email, otp.code);
   const payload = {
     ok: true,
@@ -654,13 +654,19 @@ function parseCookies(req) {
   return out;
 }
 
-function setCookie(res, name, value, { maxAgeSeconds } = {}) {
+function requestIsHttps(req) {
+  const forwarded = String(req?.headers?.['x-forwarded-proto'] || '').split(',')[0].trim();
+  return forwarded === 'https' || !!req?.socket?.encrypted;
+}
+
+function setCookie(res, name, value, { maxAgeSeconds, secure } = {}) {
   const parts = [
     `${name}=${encodeURIComponent(value)}`,
     'Path=/',
     'HttpOnly',
     'SameSite=Lax'
   ];
+  if (secure) parts.push('Secure');
   if (typeof maxAgeSeconds === 'number') {
     parts.push(`Max-Age=${Math.max(0, Math.floor(maxAgeSeconds))}`);
   }
@@ -670,8 +676,8 @@ function setCookie(res, name, value, { maxAgeSeconds } = {}) {
   res.setHeader('Set-Cookie', list);
 }
 
-function clearCookie(res, name) {
-  setCookie(res, name, '', { maxAgeSeconds: 0 });
+function clearCookie(res, name, req) {
+  setCookie(res, name, '', { maxAgeSeconds: 0, secure: requestIsHttps(req) });
 }
 
 function sendRedirect(res, location) {
@@ -728,15 +734,15 @@ function issueRevisorSession(res, revisor) {
   return true;
 }
 
-function issuePending2fa(res, revisor) {
+function issuePending2fa(req, res, revisor) {
   const token = createSessionToken({
     userType: 'revisor-2fa',
     revisorId: revisor.id,
     expMs: Date.now() + 1000 * 60 * 10
   });
   if (!token) return false;
-  clearCookie(res, COOKIE_NAME);
-  setCookie(res, TWOFA_COOKIE, token, { maxAgeSeconds: 10 * 60 });
+  clearCookie(res, COOKIE_NAME, req);
+  setCookie(res, TWOFA_COOKIE, token, { maxAgeSeconds: 10 * 60, secure: requestIsHttps(req) });
   return true;
 }
 
@@ -988,11 +994,12 @@ async function callAnthropicTranslation(system, userContent, apiKey, maxTokens =
   return security.sanitizeText(data.content?.[0]?.text || '', security.MAX_TEXT_CHARS);
 }
 
-async function translateOneSentence(sentence, language, apiKey) {
+async function translateOneSentence(sentence, language, apiKey, sourceLanguage) {
   const text = String(sentence || '').trim();
   if (!text) return '';
+  const from = sourceLanguage || 'English';
   return callAnthropicTranslation(
-    `Translate the user's English sentence to ${language}. Return ONLY the translated sentence — no quotes or commentary.`,
+    `Translate the user's ${from} sentence to ${language}. Return ONLY the translated sentence — no quotes or commentary.`,
     text,
     apiKey,
     2048
@@ -1010,16 +1017,17 @@ function splitDelimitedSentences(raw, expectedCount) {
   return parts.slice(0, expectedCount);
 }
 
-async function translateSentenceBatch(sentences, language, apiKey) {
+async function translateSentenceBatch(sentences, language, apiKey, sourceLanguage) {
   const clean = sentences.map((s) => String(s || '').trim());
   if (!clean.length) return [];
+  const from = sourceLanguage || 'English';
   const packed = clean.join(SENTENCE_DELIM);
-  const system = `You are a professional translator. Translate each English text unit to ${language}. Units are separated by the Unicode character ␞ (U+241E). You MUST output exactly ${clean.length} translated units in the same order, each separated by ␞. Do not add, remove, merge, split, or reorder units. Return ONLY the translated units with ␞ between them — no labels or commentary.`;
+  const system = `You are a professional translator. Translate each ${from} text unit to ${language}. Units are separated by the Unicode character ␞ (U+241E). You MUST output exactly ${clean.length} translated units in the same order, each separated by ␞. Do not add, remove, merge, split, or reorder units. Return ONLY the translated units with ␞ between them — no labels or commentary.`;
   const raw = await callAnthropicTranslation(system, packed, apiKey);
   return splitDelimitedSentences(raw, clean.length);
 }
 
-async function translateSentenceList(sentences, language, apiKey) {
+async function translateSentenceList(sentences, language, apiKey, sourceLanguage) {
   const clean = sentences.map((s) => String(s || '').trim());
   if (!clean.length) return [];
 
@@ -1030,11 +1038,11 @@ async function translateSentenceList(sentences, language, apiKey) {
   const out = [];
   for (let i = 0; i < clean.length; i += SENTENCE_CHUNK_SIZE) {
     const chunk = clean.slice(i, i + SENTENCE_CHUNK_SIZE);
-    let parts = await translateSentenceBatch(chunk, language, apiKey);
+    let parts = await translateSentenceBatch(chunk, language, apiKey, sourceLanguage);
     if (parts.length !== chunk.length) {
       parts = [];
       for (const sentence of chunk) {
-        parts.push(await translateOneSentence(sentence, language, apiKey));
+        parts.push(await translateOneSentence(sentence, language, apiKey, sourceLanguage));
       }
     }
     out.push(...parts);
@@ -1050,14 +1058,16 @@ async function handleTranslate(req, res) {
 
   const text = security.sanitizeText(body.text);
   const language = security.sanitizeLanguage(body.language);
+  const sourceLanguage = security.sanitizeLanguage(body.sourceLanguage) || 'English';
   const sourceSentences = security.sanitizeSentenceList(body.sentences);
   const sentenceParaMap = Array.isArray(body.sentenceParaMap) ? body.sentenceParaMap : null;
   if (!language) return sendJson(res, 400, { error: 'Missing language' });
+  if (sourceLanguage === language) return sendJson(res, 400, { error: 'Choose a different target language' });
   const apiKey = loadAnthropicApiKey();
 
   if (sourceSentences && sourceSentences.length) {
     try {
-      const translationSentences = await translateSentenceList(sourceSentences, language, apiKey);
+      const translationSentences = await translateSentenceList(sourceSentences, language, apiKey, sourceLanguage);
       const translation = security.rebuildTranslationFromSentences(translationSentences, sentenceParaMap)
         || translationSentences.join(' ');
       return sendJson(res, 200, { translation, translationSentences });
@@ -1076,7 +1086,7 @@ async function handleTranslate(req, res) {
 
   try {
     const translation = await callAnthropicTranslation(
-      `You are a professional translation engine. Translate the user's English text to ${language}. The input is divided into paragraphs separated by blank lines (double newlines). You MUST preserve the exact same number of paragraphs in the same order, using double newlines between each translated paragraph. Translate each paragraph completely — do not merge, split, or reorder paragraphs. Return ONLY the translated text — no explanations, no quotes, no preamble.`,
+      `You are a professional translation engine. Translate the user's ${sourceLanguage} text to ${language}. The input is divided into paragraphs separated by blank lines (double newlines). You MUST preserve the exact same number of paragraphs in the same order, using double newlines between each translated paragraph. Translate each paragraph completely — do not merge, split, or reorder paragraphs. Return ONLY the translated text — no explanations, no quotes, no preamble.`,
       text,
       apiKey
     );
@@ -1108,9 +1118,11 @@ async function handleQaCheck(req, res) {
   const text = security.sanitizeText(body.text);
   const sourceText = security.sanitizeText(body.sourceText);
   const language = security.sanitizeLanguage(body.language);
+  const sourceLanguage = security.sanitizeLanguage(body.sourceLanguage) || 'English';
   if (!text) return sendJson(res, 400, { error: 'Missing translation text' });
-  if (!sourceText) return sendJson(res, 400, { error: 'The English source is required' });
+  if (!sourceText) return sendJson(res, 400, { error: 'The source text is required' });
   if (!language) return sendJson(res, 400, { error: 'Missing language' });
+  if (sourceLanguage === language) return sendJson(res, 400, { error: 'Choose a different target language' });
 
   const apiKey = loadAnthropicApiKey();
   if (!apiKey) {
@@ -1125,16 +1137,16 @@ async function handleQaCheck(req, res) {
 
   const system = [
     `You are a professional ${language} translation editor.`,
-    'You will receive an English source and a customer translation in the target language.',
+    `You will receive a ${sourceLanguage} source and a customer translation in ${language}.`,
     'Correct the translation only where it misses, adds, or distorts the source, or where it contains a clear AI artifact.',
     'Do not restyle sentences that already say the same thing as the source.',
     'Keep the customer translation’s paragraph breaks. Do not merge, split, or reorder paragraphs unless a paragraph was invented or a source paragraph is missing.',
     'Respond with ONLY valid JSON (no markdown fences) in this exact shape:',
     '{"checkedTranslation":"...","summary":"one short paragraph","issues":[{"severity":"high|medium|low","detail":"..."}]}',
     'checkedTranslation is the full corrected translation. If nothing needs to change, return the customer translation unchanged, a brief reassuring summary, and an empty issues array.',
-    'Each issue should say what was wrong compared with the English source.'
+    `Each issue should say what was wrong compared with the ${sourceLanguage} source.`
   ].join(' ');
-  const userContent = `ENGLISH SOURCE:\n${sourceText}\n\nCUSTOMER TRANSLATION:\n${text}`;
+  const userContent = `${sourceLanguage.toUpperCase()} SOURCE:\n${sourceText}\n\nCUSTOMER TRANSLATION:\n${text}`;
 
   try {
     const raw = await callAnthropicTranslation(system, userContent, apiKey, 8192);
@@ -1188,7 +1200,8 @@ async function readExtractUpload(req, res) {
     return {
       buf,
       fileName: headerFileName(req),
-      language: security.sanitizeLanguage(String(req.headers['x-lc-language'] || '')) || 'Dutch'
+      language: security.sanitizeLanguage(String(req.headers['x-lc-language'] || '')) || 'Dutch',
+      sourceLanguage: security.sanitizeLanguage(String(req.headers['x-lc-source-language'] || '')) || 'English'
     };
   }
   if (!enforceJsonContentType(req, res)) return null;
@@ -1213,7 +1226,8 @@ async function readExtractUpload(req, res) {
   return {
     buf,
     fileName: String(body.fileName || body.name || 'document.docx'),
-    language: security.sanitizeLanguage(body.language) || 'Dutch'
+    language: security.sanitizeLanguage(body.language) || 'Dutch',
+    sourceLanguage: security.sanitizeLanguage(body.sourceLanguage) || 'English'
   };
 }
 
@@ -1224,11 +1238,12 @@ async function handleOkapiExtract(req, res) {
 
   const upload = await readExtractUpload(req, res);
   if (!upload) return;
-  const { buf, fileName, language } = upload;
+  const { buf, fileName, language, sourceLanguage } = upload;
+  if (sourceLanguage === language) return sendJson(res, 400, { error: 'Choose a different target language' });
 
   try {
     const extracted = okapi.extractDocx(buf, {
-      sourceLang: 'English',
+      sourceLang: sourceLanguage,
       targetLang: language,
       fileName
     });
@@ -1266,6 +1281,37 @@ async function handleOkapiExtract(req, res) {
   } catch (e) {
     console.error('[LingoCheck] Okapi extract failed:', e?.message || e);
     return sendJson(res, 502, { error: e?.message || 'Okapi extract failed' });
+  }
+}
+
+async function handleOkapiRetarget(req, res) {
+  if (!enforceJsonContentType(req, res)) return;
+  if (!enforceRateLimit(req, res, 'okapi-retarget', { limit: 10, windowMs: 60 * 1000 })) return;
+  const body = await readBodyJson(req, 64 * 1024);
+  if (!(await requireHuman(req, res, body))) return;
+  const language = security.sanitizeLanguage(body.language);
+  if (!language) return sendJson(res, 400, { error: 'Unsupported language' });
+  if (!filePacks.packIdOk(body.packId) || !filePacks.hasPack(body.packId)) {
+    return sendJson(res, 404, { error: 'Upload the Word file again. The saved copy is no longer on the server.' });
+  }
+  try {
+    const packId = filePacks.clonePackForTarget(body.packId, okapi.languageToOkapiCode(language));
+    if (!packId) {
+      return sendJson(res, 404, { error: 'Upload the Word file again. The saved copy is no longer on the server.' });
+    }
+    const stored = filePacks.loadPack(packId);
+    return sendJson(res, 200, {
+      okapi: {
+        packId,
+        sourceLang: stored.sourceLang,
+        targetLang: stored.targetLang,
+        fileName: stored.fileName,
+        sentenceCount: stored.sentenceCount
+      }
+    });
+  } catch (e) {
+    console.error('[LingoCheck] Could not prepare another language:', e?.message || e);
+    return sendJson(res, 502, { error: 'Could not prepare that language' });
   }
 }
 
@@ -1651,6 +1697,9 @@ const server = http.createServer(async (req, res) => {
     if (method === 'POST' && pathname === '/api/okapi/extract') {
       return await handleOkapiExtract(req, res);
     }
+    if (method === 'POST' && pathname === '/api/okapi/retarget') {
+      return await handleOkapiRetarget(req, res);
+    }
     if (method === 'POST' && pathname === '/api/okapi/merge') {
       return await handleOkapiMerge(req, res);
     }
@@ -1689,7 +1738,7 @@ const server = http.createServer(async (req, res) => {
       if (pwErr) return sendJson(res, 400, { error: pwErr, checks: passwordChecks(pw) });
       try {
         const r = createRevisor({ email, displayName: dn, password: pw });
-        const challenge = await startEmailTwoFactor(res, r);
+        const challenge = await startEmailTwoFactor(req, res, r);
         if (!challenge) return sendJson(res, 500, { error: 'Could not start verification' });
         return sendJson(res, 200, challenge);
       } catch (e) {
@@ -1709,7 +1758,7 @@ const server = http.createServer(async (req, res) => {
 
       const r = findRevisorByLogin(email, password);
       if (r) {
-        const challenge = await startEmailTwoFactor(res, r);
+        const challenge = await startEmailTwoFactor(req, res, r);
         if (!challenge) return sendJson(res, 500, { error: 'Could not start verification' });
         return sendJson(res, 200, challenge);
       }
@@ -1724,10 +1773,13 @@ const server = http.createServer(async (req, res) => {
       return sendJson(res, 401, { error: 'Invalid credentials' });
     }
     if (method === 'POST' && pathname === '/api/auth/2fa/resend') {
+      if (!enforceJsonContentType(req, res)) return;
+      await readBodyJson(req, 16 * 1024);
       const pending = getPending2fa(req);
       if (!pending) return sendJson(res, 401, { error: 'Verification expired. Sign in again.' });
       const r = findRevisorById(pending.revisorId);
       if (!r) return sendJson(res, 401, { error: 'Unauthorized' });
+      if (!issuePending2fa(req, res, r)) return sendJson(res, 500, { error: 'Could not send a new code' });
       const otp = issueEmailOtp(r.id);
       if (!otp) return sendJson(res, 500, { error: 'Could not send a new code' });
       const mail = await sendLoginCodeEmail(otp.email, otp.code);
