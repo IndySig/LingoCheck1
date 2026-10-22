@@ -55,6 +55,26 @@ function hasPack(id) {
   return !!(dir && fs.existsSync(path.join(dir, 'meta.json')) && fs.existsSync(path.join(dir, 'original.docx')));
 }
 
+function clonePackForTarget(id, targetLang) {
+  const loaded = loadPack(id);
+  if (!loaded) return null;
+  const code = String(targetLang || '').toLowerCase().replace(/[^a-z-]/g, '').slice(0, 12);
+  if (!code || code === loaded.targetLang) return id;
+  const xliffXml = String(loaded.xliffXml || '').replace(
+    /target-language="[^"]*"/gi,
+    `target-language="${code}"`
+  );
+  return savePack({
+    original: loaded.original,
+    xliffXml,
+    skeletons: loaded.skeletons,
+    fileName: loaded.fileName,
+    sourceLang: loaded.sourceLang,
+    targetLang: code,
+    sentenceCount: loaded.sentenceCount
+  });
+}
+
 function loadPack(id) {
   const dir = packDir(id);
   if (!dir || !hasPack(id)) return null;
@@ -79,6 +99,7 @@ function loadPack(id) {
 }
 
 module.exports = {
+  clonePackForTarget,
   hasPack,
   loadPack,
   packIdOk,

@@ -46,3 +46,74 @@ test("a docx job can keep a pack id instead of the file bytes", function () {
   assert.equal(pub.sourceFile.packId, packId);
   assert.equal(pub.sourceFile.fileB64, undefined);
 });
+
+test("one source pack can be prepared for another target language", function () {
+  const original = Buffer.from("PK same source");
+  const id = packs.savePack({
+    original,
+    xliffXml: '<file source-language="en" target-language="nl"></file>',
+    skeletons: [],
+    fileName: "manual.docx",
+    sourceLang: "en",
+    targetLang: "nl",
+    sentenceCount: 4
+  });
+  const same = packs.clonePackForTarget(id, "nl");
+  assert.equal(same, id);
+  const spanish = packs.clonePackForTarget(id, "es");
+  assert.notEqual(spanish, id);
+  const loaded = packs.loadPack(spanish);
+  assert.equal(loaded.original.toString(), "PK same source");
+  assert.equal(loaded.targetLang, "es");
+  assert.match(loaded.xliffXml, /source-language="en"/);
+  assert.match(loaded.xliffXml, /target-language="es"/);
+  assert.doesNotMatch(loaded.xliffXml, /target-language="nl"/);
+});
+
+test("a dutch source can be checked as an english translation", function () {
+  const job = security.buildClientJob({
+    clientId: "client1",
+    sourceLanguage: "Dutch",
+    language: "English",
+    qaOnly: true,
+    clientEmail: "reader@example.com",
+    originalText: "Neem een schort mee.",
+    customerTranslation: "Bring an apron.",
+    aiTranslation: "Bring an apron."
+  }, {});
+  assert.equal(job.sourceLanguage, "Dutch");
+  assert.equal(job.language, "English");
+  assert.equal(security.publicJob(job).sourceLanguage, "Dutch");
+  assert.throws(() => security.buildClientJob({
+    clientId: "client1",
+    sourceLanguage: "Dutch",
+    language: "Dutch",
+    clientEmail: "reader@example.com",
+    originalText: "Neem een schort mee.",
+    aiTranslation: "Neem een schort mee."
+  }, {}), /different/);
+});
+
+test("jobs from one source file share a bundle id", function () {
+  const bundleId = "b_" + "ab".repeat(8);
+  const job = security.buildClientJob({
+    clientId: "client1",
+    language: "Spanish",
+    bundleId,
+    clientEmail: "reader@example.com",
+    originalText: "The garden is open.",
+    aiTranslation: "El jardin esta abierto."
+  }, {});
+  assert.equal(job.bundleId, bundleId);
+  assert.equal(security.publicJob(job).bundleId, bundleId);
+  const stray = security.buildClientJob({
+    clientId: "client1",
+    language: "German",
+    bundleId: "../not-a-bundle",
+    clientEmail: "reader@example.com",
+    originalText: "The garden is open.",
+    aiTranslation: "Der Garten ist offen."
+  }, {});
+  assert.equal(stray.bundleId, null);
+  assert.equal(security.publicJob(stray).bundleId, undefined);
+});

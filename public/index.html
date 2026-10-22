@@ -594,6 +594,14 @@ function ClientView({clientId}){
   const[stage,setStage]=useState("idle");
   const[inputText,setInputText]=useState("");
   const[language,setLanguage]=useState("Dutch");
+  const[sourceLanguage,setSourceLanguage]=useState("English");
+  const[selectedLanguages,setSelectedLanguages]=useState(["Dutch"]);
+  const[extraLanguages,setExtraLanguages]=useState([]);
+  const[drafts,setDrafts]=useState({});
+  const[bundleIds,setBundleIds]=useState([]);
+  const[bundleJobs,setBundleJobs]=useState([]);
+  const[busyNote,setBusyNote]=useState("");
+  const[sending,setSending]=useState(false);
   const[aiResult,setAiResult]=useState("");
   const[currentJob,setCurrentJob]=useState(null);
   const[error,setError]=useState("");
@@ -628,6 +636,9 @@ function ClientView({clientId}){
   const textSegmentsRef=useRef([]);
   const sentencePackRef=useRef(null);
   const okapiPackageRef=useRef(null);
+  const extractLangRef=useRef("");
+  const qaSourceFileRef=useRef(null);
+  const qaExtractLangRef=useRef("");
   const deliveryTokenRef=useRef("");
   const turnstileRef=useRef();
   const turnstileWidget=useRef(null);
@@ -692,25 +703,32 @@ function ClientView({clientId}){
   },[turnstileSiteKey, stage]);
 
   useEffect(()=>{
-    const jobId=currentJob?.id;
-    if(!jobId||stage!=="sent") return;
+    const ids = bundleIds.length ? bundleIds : (currentJob?.id ? [currentJob.id] : []);
+    if(!ids.length||stage!=="sent") return;
     let cancelled=false;
+    function keepFile(job, prev){
+      const fileB64 = prev?.sourceFile?.fileB64 || sourceFileB64Ref.current || null;
+      if(!fileB64) return job;
+      if(!job.sourceFile) return { ...job, sourceFile: { ...(prev?.sourceFile||{}), fileB64 } };
+      return { ...job, sourceFile: { ...job.sourceFile, fileB64: job.sourceFile.fileB64 || fileB64 } };
+    }
     async function tick(){
       try{
-        const job=await apiFetch("/api/jobs/"+encodeURIComponent(jobId)+"?"+jobAccessQuery());
-        if(cancelled) return;
-        setCurrentJob(prev=>{
-          const fileB64 = prev?.sourceFile?.fileB64 || sourceFileB64Ref.current || null;
-          if(!job.sourceFile) return fileB64 ? { ...job, sourceFile: { ...(prev?.sourceFile||{}), fileB64 } } : job;
-          return { ...job, sourceFile: { ...job.sourceFile, fileB64: job.sourceFile.fileB64 || fileB64 } };
-        });
-        if(job?.status==="complete") setStage("complete");
+        const jobs=[];
+        for(const id of ids){
+          const job=await apiFetch("/api/jobs/"+encodeURIComponent(id)+"?"+jobAccessQuery());
+          if(job) jobs.push(job);
+        }
+        if(cancelled||!jobs.length) return;
+        setBundleJobs(jobs);
+        setCurrentJob(prev=>keepFile(jobs.find(j=>j.id===prev?.id)||jobs[0], prev));
+        if(jobs.every(j=>j.status==="complete")) setStage("complete");
       }catch{}
     }
     tick();
     const t=setInterval(tick,4000);
     return()=>{cancelled=true;clearInterval(t);};
-  },[stage,currentJob?.id,clientId]);
+  },[stage,bundleIds,currentJob?.id,clientId]);
 
   useEffect(()=>{
     let cancelled=false;
@@ -731,11 +749,20 @@ function ClientView({clientId}){
         }
         let saved=null;
         try{ saved=JSON.parse(localStorage.getItem("lc_open_job")||"null"); }catch{}
-        if(saved?.id){
-          const job=await apiFetch("/api/jobs/"+encodeURIComponent(saved.id)+"?clientId="+encodeURIComponent(clientId));
-          if(cancelled||!job) return;
-          setCurrentJob(job);
-          setStage(job.status==="complete"?"complete":"sent");
+        const savedIds=Array.isArray(saved?.ids)&&saved.ids.length?saved.ids:(saved?.id?[saved.id]:[]);
+        if(savedIds.length){
+          const jobs=[];
+          for(const id of savedIds){
+            try{
+              const job=await apiFetch("/api/jobs/"+encodeURIComponent(id)+"?clientId="+encodeURIComponent(clientId));
+              if(job) jobs.push(job);
+            }catch{}
+          }
+          if(cancelled||!jobs.length) return;
+          setBundleIds(jobs.map(j=>j.id));
+          setBundleJobs(jobs);
+          setCurrentJob(jobs[0]);
+          setStage(jobs.every(j=>j.status==="complete")?"complete":"sent");
         }
       }catch(e){
         if(jobId && token && !cancelled){
@@ -763,11 +790,13 @@ function ClientView({clientId}){
   },[]);
 
   const words=inputText.trim().split(/\s+/).filter(Boolean).length;
+  const extraDelivery=useOwnAi?extraLanguages.filter(lang=>lang&&lang!==language&&lang!==sourceLanguage):[];
+  const deliveryLanguages=useOwnAi?[language,...extraDelivery]:selectedLanguages;
+  const deliveryCount=Math.max(1, deliveryLanguages.length);
   const lingoPerWord=rates.clientPerWordEur||DEFAULT_LINGO_PER_WORD_EUR;
   const agencyPerWord=rates.agencyPerWordEur||DEFAULT_AGENCY_PER_WORD_EUR;
-  const lingoPrice=words*lingoPerWord;
-  const agencyPrice=words*agencyPerWord;
-  const savings=Math.max(0, agencyPrice-lingoPrice);
+  const lingoPrice=words*lingoPerWord*deliveryCount;
+  const agencyPrice=words*agencyPerWord*deliveryCount;
 
   function botFields(){
     return {
@@ -802,46 +831,116 @@ function ClientView({clientId}){
     return TS.buildSentenceUnits(segments);
   }
 
+  const LANG_ORDER=["Dutch","Spanish","German"];
+  const ALL_LANGS=["English","Dutch","Spanish","German"];
+
+  function chooseSource(next){
+    setSourceLanguage(next);
+    setLanguage(prev=>prev===next?(ALL_LANGS.find(lang=>lang!==next)||"English"):prev);
+    setSelectedLanguages(prev=>{
+      const kept=prev.filter(lang=>lang!==next);
+      return kept.length?kept:[ALL_LANGS.find(lang=>lang!==next)];
+    });
+    setExtraLanguages(prev=>prev.filter(lang=>lang!==next));
+  }
+
+  function toggleDeliveryLanguage(lang){
+    const has=selectedLanguages.includes(lang);
+    if(has && selectedLanguages.length===1) return;
+    const next=has
+      ? selectedLanguages.filter(l=>l!==lang)
+      : ALL_LANGS.filter(l=>l!==sourceLanguage&&(selectedLanguages.includes(l)||l===lang));
+    setSelectedLanguages(next);
+    if(!next.includes(language)) setLanguage(next[0]);
+  }
+
+  async function translateOneLanguage(lang, pack, text){
+    const source = text != null ? text : inputText.trim();
+    const payload=()=>({
+      text: source,
+      language: lang,
+      sourceLanguage,
+      sentences: pack ? pack.sentences : undefined,
+      sentenceParaMap: pack ? pack.paraMap : undefined,
+      ...botFields()
+    });
+    if(!challengeRef.current) await refreshChallenge();
+    try{
+      return await apiFetch("/api/translate",{method:"POST",body:JSON.stringify(payload())});
+    }catch(first){
+      const msg=String(first.message||"");
+      if(/Verification expired|Confirm you are human/i.test(msg)){
+        await refreshChallenge();
+        return await apiFetch("/api/translate",{method:"POST",body:JSON.stringify(payload())});
+      }
+      throw first;
+    }
+  }
+
   async function handleTranslate(){
     if(!inputText.trim()){setError("Please enter some text first.");return;}
-    setError("");setStage("translating");
+    const langs=selectedLanguages.length?selectedLanguages.slice():["Dutch"];
+    setError("");setStage("translating");setBusyNote("");
     try{
       const pack = buildSentencePackFromInput();
       sentencePackRef.current = pack;
-      const payload=()=>({
-        text: inputText.trim(),
-        language,
-        sentences: pack ? pack.sentences : undefined,
-        sentenceParaMap: pack ? pack.paraMap : undefined,
-        ...botFields()
-      });
-      if(!challengeRef.current) await refreshChallenge();
-      let data;
-      try{
-        data=await apiFetch("/api/translate",{method:"POST",body:JSON.stringify(payload())});
-      }catch(first){
-        const msg=String(first.message||"");
-        if(/Verification expired|Confirm you are human/i.test(msg)){
-          await refreshChallenge();
-          data=await apiFetch("/api/translate",{method:"POST",body:JSON.stringify(payload())});
-        }else throw first;
+      const nextDrafts={};
+      for(const lang of langs){
+        setBusyNote(langs.length>1?("Translating into "+lang+"…"):"");
+        const data=await translateOneLanguage(lang, pack);
+        const sentences=pack && Array.isArray(data.translationSentences) && data.translationSentences.length===pack.sentences.length
+          ? data.translationSentences
+          : null;
+        nextDrafts[lang]={translation:data.translation||"", translationSentences:sentences};
+        await refreshChallenge();
       }
-      setAiResult(data.translation);
-      if(
-        pack &&
-        Array.isArray(data.translationSentences) &&
-        data.translationSentences.length === pack.sentences.length
-      ){
-        sentencePackRef.current = {
-          ...pack,
-          translationSentences: data.translationSentences
-        };
-      } else if(pack) {
-        sentencePackRef.current = { ...pack, translationSentences: null };
+      const first=langs[0];
+      setDrafts(nextDrafts);
+      setLanguage(first);
+      setAiResult(nextDrafts[first].translation);
+      if(pack){
+        sentencePackRef.current={...pack, translationSentences: nextDrafts[first].translationSentences};
       }
-      setStage("translated");setShowFullDraft(false);
-      refreshChallenge();
-    }catch(e){setError("Translation failed: "+e.message);setStage("idle");refreshChallenge();}
+      setStage("translated");setShowFullDraft(false);setBusyNote("");
+    }catch(e){setError("Translation failed: "+e.message);setStage("idle");setBusyNote("");refreshChallenge();}
+  }
+
+  function newBundleId(){
+    const bytes=new Uint8Array(8);
+    crypto.getRandomValues(bytes);
+    return "b_"+Array.from(bytes).map(b=>b.toString(16).padStart(2,"0")).join("");
+  }
+
+  function withLocalFile(job){
+    const fileB64=sourceFile?.fileB64 || sourceFileB64Ref.current || null;
+    if(!job) return job;
+    if(!job.sourceFile) return fileB64 ? { ...job, sourceFile:{ fileB64 } } : job;
+    return { ...job, sourceFile:{ ...job.sourceFile, fileB64: job.sourceFile.fileB64 || fileB64 } };
+  }
+
+  async function packFor(packId, extractedAs, lang){
+    if(!packId) return "";
+    if(!extractedAs || lang===extractedAs) return packId;
+    if(!challengeRef.current) await refreshChallenge();
+    const payload=()=>({ packId, language: lang, ...botFields() });
+    let data;
+    try{
+      data=await apiFetch("/api/okapi/retarget",{method:"POST",body:JSON.stringify(payload())});
+    }catch(first){
+      const msg=String(first.message||"");
+      if(/Verification expired|Confirm you are human/i.test(msg)){
+        await refreshChallenge();
+        data=await apiFetch("/api/okapi/retarget",{method:"POST",body:JSON.stringify(payload())});
+      }else throw first;
+    }
+    await refreshChallenge();
+    return (data && data.okapi && data.okapi.packId) || packId;
+  }
+
+  async function packIdForLanguage(lang){
+    const current=okapiPackageRef.current;
+    const packId=(sourceFile?.okapi && sourceFile.okapi.packId) || (current && current.packId) || "";
+    return packFor(packId, extractLangRef.current || language, lang);
   }
 
   async function handleSend(extra={}){
@@ -852,78 +951,145 @@ function ClientView({clientId}){
       return;
     }
     try{ localStorage.setItem("lc_email", email); }catch{}
-    try{
-      if(!challengeRef.current) await refreshChallenge();
-      const ext = sourceFile?.ext || "txt";
-      const name = sourceFile?.name || `translation.${ext}`;
-      const qaOnly = extra.qaOnly === true || useOwnAi;
-      if(qaOnly && !qaSourceText.trim()){
-        setError("Upload the English source file before sending.");
+    const qaOnly = extra.qaOnly === true || useOwnAi;
+    if(qaOnly && !qaSourceText.trim()){
+      setError("Upload the "+sourceLanguage+" source file before sending.");
+      return;
+    }
+    const extras = qaOnly ? extraLanguages.filter(lang=>lang && lang!==language && lang!==sourceLanguage) : [];
+    const langs = qaOnly ? [language, ...extras] : (selectedLanguages.length ? selectedLanguages.slice() : [language]);
+    if(!qaOnly){
+      const missing=langs.filter(lang=>!(drafts[lang]&&drafts[lang].translation));
+      if(missing.length){
+        setError("Translate the file again before sending. Still needed: "+missing.join(", ")+".");
         return;
       }
+    }
+    setSending(true);
+    try{
+      const ext = sourceFile?.ext || "txt";
+      const name = sourceFile?.name || `translation.${ext}`;
       const pack = qaOnly ? null : (sentencePackRef.current || buildSentencePackFromInput());
       const sourceSegments = qaSourceSegmentsRef.current.length
         ? qaSourceSegmentsRef.current
         : qaSourceText.trim().split(/\n{2,}/).map(s => s.trim()).filter(Boolean);
-      const j=await apiFetch("/api/jobs",{method:"POST",body:JSON.stringify({
-        clientId,
-        clientEmail: email,
-        originalText: qaOnly ? qaSourceText.trim() : (textSegmentsRef.current.length ? textSegmentsRef.current.join("\n\n") : inputText.trim()),
-        customerTranslation: qaOnly ? inputText.trim() : null,
-        originalSegments: qaOnly
-          ? sourceSegments
-          : (window.LcTextSegments
-            ? LcTextSegments.normalizeDocumentSegments(
-                (textSegmentsRef.current && textSegmentsRef.current.length)
-                  ? textSegmentsRef.current
-                  : inputText.trim())
-            : ((textSegmentsRef.current && textSegmentsRef.current.length)
-              ? textSegmentsRef.current
-              : inputText.trim().split(/\n{2,}/).map(s => s.trim()).filter(Boolean))),
-        sourceSentences: qaOnly ? null : (pack ? pack.sentences : null),
-        translationSentences: qaOnly ? null : (pack?.translationSentences || null),
-        sentenceParaMap: qaOnly ? null : (pack ? pack.paraMap : null),
-        language,
-        aiTranslation: qaOnly ? (aiResult.trim() || inputText.trim()) : aiResult,
-        qaOnly,
-        qaFindings: qaOnly ? qaFindings : null,
-        sourceFile: {
-          name,
-          ext,
-          packId: (sourceFile?.okapi && sourceFile.okapi.packId) || (okapiPackageRef.current && okapiPackageRef.current.packId) || undefined,
-          fileB64: ((sourceFile?.okapi && sourceFile.okapi.packId) || (okapiPackageRef.current && okapiPackageRef.current.packId))
-            ? null
-            : (sourceFile?.fileB64 || sourceFileB64Ref.current || null),
-          okapi: ((sourceFile?.okapi && sourceFile.okapi.packId) || (okapiPackageRef.current && okapiPackageRef.current.packId))
-            ? undefined
-            : ((ext==="docx" && (sourceFile?.okapi || okapiPackageRef.current)) || undefined)
-        },
-        ...botFields()
-      })});
-      setCurrentJob({
-        ...j,
-        sourceFile: j.sourceFile
-          ? { ...j.sourceFile, fileB64: sourceFile?.fileB64 || sourceFileB64Ref.current || null }
-          : j.sourceFile
-      });
-      try{ localStorage.setItem("lc_open_job", JSON.stringify({id:j.id})); }catch{}
+      const originalText = qaOnly ? qaSourceText.trim() : (textSegmentsRef.current.length ? textSegmentsRef.current.join("\n\n") : inputText.trim());
+      const originalSegments = qaOnly
+        ? sourceSegments
+        : (window.LcTextSegments
+          ? LcTextSegments.normalizeDocumentSegments(
+              (textSegmentsRef.current && textSegmentsRef.current.length)
+                ? textSegmentsRef.current
+                : inputText.trim())
+          : ((textSegmentsRef.current && textSegmentsRef.current.length)
+            ? textSegmentsRef.current
+            : inputText.trim().split(/\n{2,}/).map(s => s.trim()).filter(Boolean)));
+      const bundleId = langs.length>1 ? newBundleId() : null;
+      const created=[];
+      const failed=[];
+      for(const lang of langs){
+        try{
+          const isChecked = qaOnly && lang===language;
+          setBusyNote(langs.length>1?(isChecked?("Sending the "+lang+" check…"):("Translating the source into "+lang+"…")):"");
+          let draft=drafts[lang]||{};
+          let langPackId = "";
+          let jobSentences = null;
+          let jobPara = null;
+          let jobTranslation = draft.translation;
+          let jobFile = sourceFile;
+          let jobExt = sourceFile?.ext || "txt";
+          let jobName = sourceFile?.name || `translation.${jobExt}`;
+          let jobB64 = sourceFile?.fileB64 || sourceFileB64Ref.current || null;
+          let jobOkapi = sourceFile?.okapi || okapiPackageRef.current || null;
+          if(isChecked){
+            jobTranslation = aiResult.trim() || inputText.trim();
+            langPackId = (sourceFile?.okapi && sourceFile.okapi.packId) || (okapiPackageRef.current && okapiPackageRef.current.packId) || "";
+          } else if(qaOnly){
+            const srcFile = qaSourceFileRef.current;
+            const srcPack = srcFile && Array.isArray(srcFile.sentences) && srcFile.sentences.length
+              ? { sentences: srcFile.sentences, paraMap: srcFile.sentenceParaMap || srcFile.sentences.map(()=>0) }
+              : null;
+            const data = await translateOneLanguage(lang, srcPack, qaSourceText.trim());
+            const sentences = srcPack && Array.isArray(data.translationSentences) && data.translationSentences.length===srcPack.sentences.length
+              ? data.translationSentences
+              : null;
+            draft = { translation: data.translation || "", translationSentences: sentences };
+            jobTranslation = draft.translation;
+            jobSentences = srcPack ? srcPack.sentences : null;
+            jobPara = srcPack ? srcPack.paraMap : null;
+            langPackId = await packFor(srcFile && srcFile.okapi && srcFile.okapi.packId, qaExtractLangRef.current, lang);
+            jobFile = srcFile;
+            jobExt = srcFile?.ext || "txt";
+            jobName = srcFile?.name || `source.${jobExt}`;
+            jobB64 = srcFile?.fileB64 || null;
+            jobOkapi = srcFile?.okapi || null;
+          } else {
+            langPackId = await packIdForLanguage(lang);
+            jobSentences = pack ? pack.sentences : null;
+            jobPara = pack ? pack.paraMap : null;
+            jobTranslation = draft.translation;
+          }
+          const hasPack=!!langPackId;
+          if(!challengeRef.current) await refreshChallenge();
+          const j=await apiFetch("/api/jobs",{method:"POST",body:JSON.stringify({
+            clientId,
+            clientEmail: email,
+            originalText,
+            customerTranslation: isChecked ? inputText.trim() : null,
+            originalSegments,
+            sourceSentences: jobSentences,
+            translationSentences: isChecked ? null : (draft.translationSentences || null),
+            sentenceParaMap: jobPara,
+            language: lang,
+            sourceLanguage,
+            bundleId,
+            aiTranslation: jobTranslation,
+            qaOnly: isChecked,
+            qaFindings: isChecked ? qaFindings : null,
+            sourceFile: jobFile ? {
+              name: jobName,
+              ext: jobExt,
+              packId: hasPack ? langPackId : undefined,
+              fileB64: hasPack ? null : jobB64,
+              okapi: hasPack ? undefined : ((jobExt==="docx" && jobOkapi) || undefined)
+            } : undefined,
+            ...botFields()
+          })});
+          created.push(withLocalFile(j));
+          await refreshChallenge();
+        }catch(err){
+          failed.push(lang+": "+(err.message||"could not send"));
+        }
+      }
+      if(!created.length){
+        setError(failed[0]||"Could not send for review.");
+        return;
+      }
+      setBundleIds(created.map(j=>j.id));
+      setBundleJobs(created);
+      setCurrentJob(created[0]);
+      try{ localStorage.setItem("lc_open_job", JSON.stringify({id:created[0].id, ids:created.map(j=>j.id)})); }catch{}
       setStage("sent");
-      refreshChallenge();
+      setBusyNote("");
+      if(failed.length) setError("Some languages were not sent. "+failed.join(" "));
     }catch(e){
       setError(e.message||"Could not send for review.");
       refreshChallenge();
+    }finally{
+      setSending(false);
     }
   }
 
   async function handleCheck(){
     if(!inputText.trim()){setError("Please paste or upload the translation first.");return;}
-    if(!qaSourceText.trim()){setError("Upload the English source file so we can check the translation against it.");return;}
+    if(!qaSourceText.trim()){setError("Upload the "+sourceLanguage+" source file so we can check the translation against it.");return;}
     setError("");setStage("checking");setQaFindings(null);
     try{
       const payload=()=>({
         text: inputText.trim(),
         sourceText: qaSourceText.trim(),
         language,
+        sourceLanguage,
         ...botFields()
       });
       if(!challengeRef.current) await refreshChallenge();
@@ -947,7 +1113,8 @@ function ClientView({clientId}){
   function handleReset(){
     setStage("idle");setInputText("");setAiResult("");setCurrentJob(null);setError("");setSourceFile(null);setFileScan(null);setUseOwnAi(true);setShowFullDraft(false);setQaFindings(null);
     setQaSourceText("");setQaSourceName("");setQaSourceScan(null);
-    sourceFileB64Ref.current=null;textSegmentsRef.current=[];sentencePackRef.current=null;okapiPackageRef.current=null;qaSourceSegmentsRef.current=[];
+    setDrafts({});setBundleIds([]);setBundleJobs([]);setBusyNote("");setSending(false);setSelectedLanguages(["Dutch"]);setExtraLanguages([]);setLanguage("Dutch");setSourceLanguage("English");
+    sourceFileB64Ref.current=null;textSegmentsRef.current=[];sentencePackRef.current=null;okapiPackageRef.current=null;extractLangRef.current="";qaSourceFileRef.current=null;qaExtractLangRef.current="";qaSourceSegmentsRef.current=[];
     deliveryTokenRef.current="";
     try{ localStorage.removeItem("lc_open_job"); }catch{}
     if(location.search) history.replaceState({}, "", location.pathname);
@@ -958,6 +1125,7 @@ function ClientView({clientId}){
   function onToggleFullTranslate(ev){
     const wantFull=!!ev.target.checked;
     setUseOwnAi(!wantFull);
+    if(wantFull) setLanguage(selectedLanguages[0] || "Dutch");
     setInputText("");
     setAiResult("");
     setQaFindings(null);
@@ -969,6 +1137,12 @@ function ClientView({clientId}){
     qaSourceSegmentsRef.current=[];
     textSegmentsRef.current=[];
     sentencePackRef.current=null;
+    okapiPackageRef.current=null;
+    extractLangRef.current="";
+    qaSourceFileRef.current=null;
+    qaExtractLangRef.current="";
+    setDrafts({});
+    setExtraLanguages([]);
     if(fileRef.current) fileRef.current.value="";
     if(qaSourceRef.current) qaSourceRef.current.value="";
   }
@@ -1006,6 +1180,7 @@ function ClientView({clientId}){
     }
     if(extras && extras.okapi){
       okapiPackageRef.current = extras.okapi;
+      extractLangRef.current = language;
     } else if(sourceExt !== "docx") {
       okapiPackageRef.current = null;
     }
@@ -1022,7 +1197,7 @@ function ClientView({clientId}){
     });
   }
 
-  async function postOkapiExtract(file, buf){
+  async function postOkapiExtract(file, buf, targetLanguage){
     if(!challengeRef.current) await refreshChallenge();
     const send = async () => {
       const r = await fetch("/api/okapi/extract", {
@@ -1030,7 +1205,8 @@ function ClientView({clientId}){
         headers: {
           "Content-Type": "application/octet-stream",
           "X-LC-Filename": encodeURIComponent(file.name || "document.docx"),
-          "X-LC-Language": language,
+          "X-LC-Language": targetLanguage || language,
+          "X-LC-Source-Language": sourceLanguage,
           "X-LC-Challenge": challengeRef.current || "",
           "X-LC-Turnstile": (window.turnstile && turnstileWidget.current!=null) ? (window.turnstile.getResponse(turnstileWidget.current)||"") : "",
           "X-LC-Honeypot": honeypotValue()
@@ -1084,7 +1260,7 @@ function ClientView({clientId}){
     }
     if(keepLayout && okapiReady){
       try{
-        const data = await postOkapiExtract(file, buf);
+        const data = await postOkapiExtract(file, buf, opts && opts.targetLanguage);
         if(data && data.okapi && data.okapi.packId && data.text && Array.isArray(data.sentences) && data.sentences.length){
           refreshChallenge();
           return {
@@ -1150,10 +1326,13 @@ function ClientView({clientId}){
     const file=e.target.files[0];if(!file)return;
     setError("");setQaSourceScan(null);setQaSourceText("");setQaSourceName("");
     qaSourceSegmentsRef.current=[];
+    qaSourceFileRef.current=null;
+    qaExtractLangRef.current="";
     if(file.size>25*1024*1024){setError("File too large (max 25 MB).");return;}
     setQaSourceBusy(true);
     try{
-      const result = await inspectUpload(file, {layout:false});
+      const sourceTarget = extraLanguages.find(lang=>lang && lang!==sourceLanguage && lang!==language) || (language!==sourceLanguage?language:"Spanish");
+      const result = await inspectUpload(file, {targetLanguage: sourceTarget});
       if(!result.fit){
         setQaSourceScan({name:file.name,fit:false,reason:result.reason});
         return;
@@ -1174,12 +1353,21 @@ function ClientView({clientId}){
       const text = DX ? DX.truncateExtractedText(joined) : String(result.text||"").slice(0, 25000);
       const truncated = String(result.text||"").length > text.length;
       qaSourceSegmentsRef.current = segs;
+      qaSourceFileRef.current = {
+        name: file.name,
+        ext: result.ext,
+        fileB64: result.fileB64 || null,
+        okapi: result.okapi || null,
+        sentences: result.sentences || null,
+        sentenceParaMap: result.sentenceParaMap || null
+      };
+      qaExtractLangRef.current = sourceTarget;
       setQaSourceText(text);
       setQaSourceName(file.name);
       setQaSourceScan({
         name:file.name,
         fit:true,
-        reason: truncated ? "English source extracted (truncated to 25,000 characters)" : "English source extracted"
+        reason: truncated ? (sourceLanguage+" source extracted (truncated to 25,000 characters)") : (sourceLanguage+" source extracted")
       });
     }catch(err){
       setError("Could not read the source file: "+(err.message||"Unknown error"));
@@ -1188,13 +1376,14 @@ function ClientView({clientId}){
     }
   }
 
-  async function getSourceFileB64(meta){
+  async function getSourceFileB64(meta, job){
     if(meta?.fileB64) return meta.fileB64;
     if(meta?.docxB64) return meta.docxB64;
     if(sourceFileB64Ref.current) return sourceFileB64Ref.current;
-    if(!currentJob?.id) return null;
+    const id = job?.id || currentJob?.id;
+    if(!id) return null;
     try{
-      const data=await apiFetch("/api/jobs/"+encodeURIComponent(currentJob.id)+"/source?"+jobAccessQuery());
+      const data=await apiFetch("/api/jobs/"+encodeURIComponent(id)+"/source?"+jobAccessQuery());
       if(data?.fileB64) sourceFileB64Ref.current=data.fileB64;
       return data?.fileB64 || null;
     }catch{
@@ -1202,62 +1391,62 @@ function ClientView({clientId}){
     }
   }
 
-  async function getOkapiPackage(meta){
+  async function getOkapiPackage(meta, job){
     if(meta?.okapi?.packId) return meta.okapi;
     if(meta?.packId) return { packId: meta.packId };
     if(meta?.okapi?.xliffB64) return meta.okapi;
     if(okapiPackageRef.current?.packId || okapiPackageRef.current?.xliffB64) return okapiPackageRef.current;
     if(sourceFile?.okapi?.packId || sourceFile?.okapi?.xliffB64) return sourceFile.okapi;
-    if(currentJob?.sourceFile?.packId) return { packId: currentJob.sourceFile.packId };
-    if(!currentJob?.id) return null;
+    const id = job?.id || currentJob?.id;
+    if(!id) return null;
     try{
-      const data=await apiFetch("/api/jobs/"+encodeURIComponent(currentJob.id)+"/source?"+jobAccessQuery());
+      const data=await apiFetch("/api/jobs/"+encodeURIComponent(id)+"/source?"+jobAccessQuery());
       if(data?.packId){
-        okapiPackageRef.current={ packId: data.packId };
-        return okapiPackageRef.current;
+        return { packId: data.packId };
       }
-      if(data?.okapi?.xliffB64){
-        okapiPackageRef.current=data.okapi;
-        return data.okapi;
-      }
+      if(data?.okapi?.xliffB64) return data.okapi;
     }catch{}
     return null;
   }
 
-  function exactOkapiSentences(){
+  function exactOkapiSentences(job){
+    const target = job || currentJob;
     const expected = (okapiPackageRef.current && okapiPackageRef.current.sentenceCount)
       || (sentencePackRef.current && sentencePackRef.current.sentences && sentencePackRef.current.sentences.length)
       || 0;
-    const stored = currentJob && Array.isArray(currentJob.translationSentences) ? currentJob.translationSentences : null;
+    const stored = target && Array.isArray(target.translationSentences) ? target.translationSentences : null;
     if(stored && stored.length && (!expected || stored.length === expected)) return stored;
     const pack = sentencePackRef.current;
     if(
       pack?.fromOkapi &&
       Array.isArray(pack.translationSentences) &&
       pack.translationSentences.length &&
-      (!expected || pack.translationSentences.length === expected)
+      (!expected || pack.translationSentences.length === expected) &&
+      (!target || target.id === currentJob?.id)
     ){
       return pack.translationSentences;
     }
     return null;
   }
 
-  async function downloadTranslated(){
+  async function downloadTranslated(job){
     setDownloadNote("");
-    const meta = currentJob.sourceFile || { name:"translation.txt", ext:"txt" };
+    const target = job || currentJob;
+    const meta = target.sourceFile || { name:"translation.txt", ext:"txt" };
     const baseName = (meta.name||"translation").replace(/\.[^.]+$/,"");
     const ext = (meta.ext||"txt").toLowerCase();
-    const text = currentJob.revisedTranslation||"";
-    const finalName = `${baseName}-translated.${ext}`;
+    const text = target.revisedTranslation||"";
+    const multi = bundleJobs.length > 1 || bundleIds.length > 1;
+    const finalName = multi ? `${baseName}-${target.language||"translation"}.${ext}` : `${baseName}-translated.${ext}`;
     if(ext==="txt"||ext==="md"){
       return downloadBlob(new Blob([text],{type:"text/plain;charset=utf-8"}), finalName);
     }
-    const segments = currentJob.originalSegments || null;
+    const segments = target.originalSegments || null;
     if(ext==="docx"){
-      const okapiPkg = await getOkapiPackage(meta);
+      const okapiPkg = await getOkapiPackage(meta, target);
       if(okapiReady && okapiPkg?.packId){
         if(!challengeRef.current) await refreshChallenge();
-        const translations = exactOkapiSentences();
+        const translations = exactOkapiSentences(target);
         const sendMerge = async () => {
           const r = await fetch("/api/okapi/merge", {
             method: "POST",
@@ -1295,14 +1484,14 @@ function ClientView({clientId}){
         }
       }
     }
-    const fileB64 = await getSourceFileB64(meta);
+    const fileB64 = await getSourceFileB64(meta, target);
     if(!fileB64) throw new Error("Original file is unavailable. Open the link from your email and try again.");
     if(ext==="docx"){
-      const okapiPkg = await getOkapiPackage(meta);
+      const okapiPkg = await getOkapiPackage(meta, target);
       if(okapiReady && okapiPkg?.xliffB64){
         try{
           if(!challengeRef.current) await refreshChallenge();
-          const translations = exactOkapiSentences();
+          const translations = exactOkapiSentences(target);
           const payload=()=>({
             fileB64,
             okapi: okapiPkg,
@@ -1377,16 +1566,16 @@ function ClientView({clientId}){
   const howItWorks=(()=>{
     const steps=useOwnAi
       ?[
-        ["1","Upload","Paste your translation and upload the English source"],
+        ["1","Upload","Paste your translation and upload the "+sourceLanguage+" source"],
         ["2","AI check","We correct it against the source and mark every change"],
         ["3","Human touch","A certified translator reads every word"],
-        ["4","Delivered","Download the corrected file"]
+        ["4","Delivered","Download the source in each language you add"]
       ]
       :[
-        ["1","Upload","Paste your English text or a file"],
-        ["2","AI draft","Instant first translation"],
+        ["1","Upload","Paste your "+sourceLanguage+" text or a file"],
+        ["2","AI draft","A draft in every language you select"],
         ["3","Human touch","A certified translator reads every word"],
-        ["4","Delivered","Download the finished file"]
+        ["4","Delivered","Download the file in each language"]
       ];
     return e("section",{"aria-label":"How it works",className:"lc-panel",style:{borderRadius:24,padding:isCompact?"16px 16px 14px":"18px 22px 16px",marginBottom:isCompact?16:20}},
       e("div",{style:{fontSize:13,fontWeight:600,color:C.muted,marginBottom:isCompact?12:14}},"How it works"),
@@ -1410,7 +1599,7 @@ function ClientView({clientId}){
     e("div",{style:{display:"grid",gap:10,marginBottom:words?12:0}},
       [
         [words,"Words",useOwnAi?"Translation word count":"Source word count"],
-        [formatEuro(lingoPrice),"Your price","LingoCheck price for this job"],
+        [formatEuro(lingoPrice),"Your price",deliveryCount>1?("Total for "+deliveryCount+" languages"):"LingoCheck price for this job"],
         [formatEuro(agencyPrice),"Typical agency","Average agency rate — comparison only"]
       ].map(([v,l,hint],i)=>
         e("div",{key:i,title:hint,style:{background:"rgba(255,255,255,0.55)",border:`1px solid ${C.border}`,borderRadius:16,padding:"12px 14px",display:"flex",alignItems:"center",justifyContent:"space-between",gap:10}},
@@ -1441,8 +1630,8 @@ function ClientView({clientId}){
         ),
         e("p",{style:{...st.muted,maxWidth:560,margin:0,fontSize:isCompact?15:16}},
           useOwnAi
-            ?"Paste the translation you already have and upload the English source. We check it against the original, then a real person proofreads every change."
-            :"Need a full translation from English? Our AI drafts it, then a human revisor makes it sound right."
+            ?"Paste the translation you already have and upload the "+sourceLanguage+" source. We check it against the original, then a real person proofreads every change."
+            :"Need a full translation from "+sourceLanguage+"? Our AI drafts every language you select, then a human revisor makes each one sound right."
         )
       ),
 
@@ -1455,33 +1644,60 @@ function ClientView({clientId}){
           e("input",{id:"full-translate",type:"checkbox",checked:!useOwnAi,onChange:onToggleFullTranslate,style:{marginTop:3,width:16,height:16,accentColor:C.accent,flexShrink:0,cursor:"pointer"}}),
           e("span",null,
             e("span",{style:{display:"block",fontSize:14,fontWeight:600,color:C.text,marginBottom:3}},"Need a full translation from LingoCheck?"),
-            e("span",{style:{display:"block",fontSize:13,color:C.muted,lineHeight:1.5}},!useOwnAi?"We’ll translate from English first, then send to a revisor.":"Leave unchecked to check a translation you already have.")
+            e("span",{style:{display:"block",fontSize:13,color:C.muted,lineHeight:1.5}},!useOwnAi?"We’ll translate the source file into every language you select, then send each one to a revisor.":"Leave unchecked to check a translation you already have.")
           )
         ),
         e("div",{className:"lc-panel",style:{borderRadius:28,padding:cardPad}},
           e("div",{style:{display:"flex",alignItems:"center",justifyContent:"space-between",gap:10,marginBottom:14,flexWrap:"wrap"}},
-            e("span",{style:{...st.label,marginBottom:0,fontSize:14}},useOwnAi?"Your translation":"Your English text"),
+            e("span",{style:{...st.label,marginBottom:0,fontSize:14}},useOwnAi?"Your translation":("Your "+sourceLanguage+" text")),
             e("span",{style:{fontSize:12,fontWeight:600,color:C.accent,background:C.lilac,padding:"5px 12px",borderRadius:999}},useOwnAi?"Quality check":"Full translation")
           ),
           useOwnAi
-            ?e("div",{style:{background:"rgba(255,255,255,0.55)",border:`1px solid ${C.border}`,borderRadius:16,padding:"12px 14px",marginBottom:16,fontSize:13,color:C.muted,lineHeight:1.55}},"Paste or upload the translation, then upload the English source it was made from. AI checks it against that source before a translator proofreads.")
-            :e("div",{style:{background:"rgba(255,255,255,0.55)",border:`1px solid ${C.border}`,borderRadius:16,padding:"12px 14px",marginBottom:16,fontSize:13,color:C.muted,lineHeight:1.55}},"Paste English source text. We’ll draft a translation, then a revisor will refine it."),
+            ?e("div",{style:{background:"rgba(255,255,255,0.55)",border:`1px solid ${C.border}`,borderRadius:16,padding:"12px 14px",marginBottom:16,fontSize:13,color:C.muted,lineHeight:1.55}},"Paste or upload the translation, then upload the "+sourceLanguage+" source it was made from. AI checks it against that source before a translator proofreads.")
+            :e("div",{style:{background:"rgba(255,255,255,0.55)",border:`1px solid ${C.border}`,borderRadius:16,padding:"12px 14px",marginBottom:16,fontSize:13,color:C.muted,lineHeight:1.55}},"Paste the "+sourceLanguage+" source. Choose one or more languages. We’ll draft each one, then a revisor refines it."),
           useOwnAi
-            ?e("div",{style:{display:"flex",alignItems:"center",gap:10,marginBottom:16}},
-              e("span",{style:{fontSize:13,color:C.muted,whiteSpace:"nowrap"}},"Language"),
-              e("select",{value:language,onChange:ev=>setLanguage(ev.target.value),style:{flex:1,background:"rgba(255,255,255,0.75)",border:`1px solid ${C.border}`,borderRadius:14,padding:"10px 14px",fontFamily:"inherit",fontSize:14,fontWeight:600,color:C.text,outline:"none",cursor:"pointer"}},
-                e("option",null,"Dutch"),e("option",null,"Spanish"),e("option",null,"German")
+            ?e("div",{style:{display:"flex",flexDirection:"column",gap:10,marginBottom:16}},
+              e("div",{style:{display:"flex",alignItems:"center",gap:10}},
+                e("span",{style:{fontSize:13,color:C.muted,whiteSpace:"nowrap",width:118}},"Source language"),
+                e("select",{value:sourceLanguage,onChange:ev=>chooseSource(ev.target.value),style:{flex:1,background:"rgba(255,255,255,0.75)",border:`1px solid ${C.border}`,borderRadius:14,padding:"10px 14px",fontFamily:"inherit",fontSize:14,fontWeight:600,color:C.text,outline:"none",cursor:"pointer"}},
+                  ALL_LANGS.map(lang=>e("option",{key:lang,value:lang},lang))
+                )
+              ),
+              e("div",{style:{display:"flex",alignItems:"center",gap:10}},
+                e("span",{style:{fontSize:13,color:C.muted,whiteSpace:"nowrap",width:118}},"Your translation"),
+                e("select",{value:language,onChange:ev=>{const next=ev.target.value;setLanguage(next);setExtraLanguages(prev=>prev.filter(lang=>lang!==next));},style:{flex:1,background:"rgba(255,255,255,0.75)",border:`1px solid ${C.border}`,borderRadius:14,padding:"10px 14px",fontFamily:"inherit",fontSize:14,fontWeight:600,color:C.text,outline:"none",cursor:"pointer"}},
+                  ALL_LANGS.filter(lang=>lang!==sourceLanguage).map(lang=>e("option",{key:lang,value:lang},lang))
+                )
               )
             )
-            :e("div",{style:{display:"flex",alignItems:"center",gap:10,marginBottom:16}},
-              e("div",{style:{background:"rgba(255,255,255,0.75)",border:`1px solid ${C.border}`,borderRadius:14,padding:"10px 14px",fontSize:14,color:C.muted}},"English"),
-              e("span",{style:{color:C.accent,fontSize:18}},"→"),
-              e("select",{value:language,onChange:ev=>setLanguage(ev.target.value),style:{flex:1,background:"rgba(255,255,255,0.75)",border:`1px solid ${C.border}`,borderRadius:14,padding:"10px 14px",fontFamily:"inherit",fontSize:14,fontWeight:600,color:C.text,outline:"none",cursor:"pointer"}},
-                e("option",null,"Dutch"),e("option",null,"Spanish"),e("option",null,"German")
-              )
+            :e("div",{style:{marginBottom:16}},
+              e("div",{style:{display:"flex",alignItems:"center",gap:10,marginBottom:10}},
+                e("span",{style:{fontSize:13,color:C.muted,whiteSpace:"nowrap"}},"Source"),
+                e("select",{value:sourceLanguage,onChange:ev=>chooseSource(ev.target.value),style:{flex:1,background:"rgba(255,255,255,0.75)",border:`1px solid ${C.border}`,borderRadius:14,padding:"10px 14px",fontFamily:"inherit",fontSize:14,fontWeight:600,color:C.text,outline:"none",cursor:"pointer"}},
+                  ALL_LANGS.map(lang=>e("option",{key:"src-"+lang,value:lang},lang))
+                )
+              ),
+              e("div",{style:{fontSize:13,color:C.muted,marginBottom:8}},"Deliver the source file in"),
+              e("div",{style:{display:"flex",gap:8,flexWrap:"wrap"}},
+                ALL_LANGS.filter(lang=>lang!==sourceLanguage).map(lang=>e("button",{
+                  key:lang,
+                  type:"button",
+                  "aria-pressed":selectedLanguages.includes(lang),
+                  onClick:()=>toggleDeliveryLanguage(lang),
+                  style:{
+                    ...st.btn,
+                    padding:"8px 14px",
+                    fontSize:13,
+                    background:selectedLanguages.includes(lang)?C.accent:"rgba(255,255,255,0.75)",
+                    color:selectedLanguages.includes(lang)?C.white:C.text,
+                    border:`1px solid ${selectedLanguages.includes(lang)?C.accent:C.border}`
+                  }
+                },lang))
+              ),
+              deliveryCount>1&&e("div",{style:{fontSize:12,color:C.muted,lineHeight:1.5,marginTop:8}},"Each language is reviewed on its own. You get a separate file for every language.")
             ),
           e("div",{style:{position:"relative",marginBottom:14}},
-            e("textarea",{style:{...st.ta,minHeight:sourceFile?88:(isCompact?140:180),maxHeight:sourceFile?140:240,overflow:"auto"},placeholder:useOwnAi?"Paste the translation here…":"Paste your English text here…",value:inputText,onChange:ev=>{setInputText(ev.target.value);if(fileScan&&fileScan.fit===false)setFileScan(null);},maxLength:25000}),
+            e("textarea",{style:{...st.ta,minHeight:sourceFile?88:(isCompact?140:180),maxHeight:sourceFile?140:240,overflow:"auto"},placeholder:useOwnAi?"Paste the translation here…":("Paste your "+sourceLanguage+" text here…"),value:inputText,onChange:ev=>{setInputText(ev.target.value);if(fileScan&&fileScan.fit===false)setFileScan(null);},maxLength:25000}),
             e("span",{style:{position:"absolute",bottom:12,right:14,fontSize:12,color:C.muted}},words," words")
           ),
           e("div",{style:{display:"flex",alignItems:isCompact?"stretch":"center",gap:10,marginBottom:18,flexDirection:isCompact?"column":"row",flexWrap:"wrap"}},
@@ -1494,8 +1710,8 @@ function ClientView({clientId}){
             e("div",{style:{opacity:0.9}},fileScan.name," — ",fileScan.reason)
           ),
           useOwnAi&&e("div",{style:{marginBottom:18}},
-            e("label",{style:{...st.label,marginBottom:8}},"English source file"),
-            e("div",{style:{fontSize:12,color:C.muted,lineHeight:1.5,marginBottom:10}},"Required. This is the original English document, so we can see whether the translation changed the meaning."),
+            e("label",{style:{...st.label,marginBottom:8}},sourceLanguage+" source file"),
+            e("div",{style:{fontSize:12,color:C.muted,lineHeight:1.5,marginBottom:10}},"Required. We check your translation against this "+sourceLanguage+" source. You can also deliver the same source file in other languages."),
             e("input",{ref:qaSourceRef,type:"file",accept:".txt,.md,.pdf,.docx",style:{display:"none"},onChange:handleQaSource}),
             e("div",{style:{display:"flex",alignItems:isCompact?"stretch":"center",gap:10,flexDirection:isCompact?"column":"row",flexWrap:"wrap"}},
               e("button",{type:"button",disabled:qaSourceBusy,onClick:()=>qaSourceRef.current&&qaSourceRef.current.click(),style:{...st.btn,background:"rgba(255,255,255,0.7)",border:`1px solid ${C.border}`,color:C.text,padding:"9px 16px",fontSize:13,width:isCompact?"100%":"auto"}},qaSourceBusy?"Reading source…":(qaSourceName?"Replace source file":"Upload source file")),
@@ -1504,6 +1720,26 @@ function ClientView({clientId}){
             qaSourceScan&&e("div",{style:{fontSize:13,marginTop:12,color:qaSourceScan.fit?C.green:C.error,background:qaSourceScan.fit?C.greenBg:"#fdf2f2",border:`1px solid ${qaSourceScan.fit?C.greenBorder:"rgba(196,61,61,0.22)"}`,borderRadius:14,padding:"10px 12px"}},
               e("div",{style:{fontWeight:600,marginBottom:4}},qaSourceScan.fit?"Source file is ready":"Source file is not usable"),
               e("div",{style:{opacity:0.9}},qaSourceScan.name," — ",qaSourceScan.reason)
+            ),
+            e("div",{style:{marginTop:14}},
+              e("div",{style:{fontSize:13,color:C.muted,marginBottom:8}},"Also deliver this source file in"),
+              e("div",{style:{display:"flex",gap:8,flexWrap:"wrap"}},
+                ALL_LANGS.filter(lang=>lang!==sourceLanguage&&lang!==language).map(lang=>e("button",{
+                  key:lang,
+                  type:"button",
+                  "aria-pressed":extraLanguages.includes(lang),
+                  onClick:()=>setExtraLanguages(prev=>prev.includes(lang)?prev.filter(item=>item!==lang):ALL_LANGS.filter(item=>item!==sourceLanguage&&item!==language&&(prev.includes(item)||item===lang))),
+                  style:{
+                    ...st.btn,
+                    padding:"8px 14px",
+                    fontSize:13,
+                    background:extraLanguages.includes(lang)?C.accent:"rgba(255,255,255,0.75)",
+                    color:extraLanguages.includes(lang)?C.white:C.text,
+                    border:`1px solid ${extraLanguages.includes(lang)?C.accent:C.border}`
+                  }
+                },lang))
+              ),
+              extraDelivery.length>0&&e("div",{style:{fontSize:12,color:C.muted,lineHeight:1.5,marginTop:8}},"Your "+language+" text is checked. "+extraDelivery.join(" and ")+" will be drafted from this source and reviewed separately.")
             )
           ),
           e("label",{style:{...st.label,marginBottom:8}},"Email for delivery"),
@@ -1524,13 +1760,13 @@ function ClientView({clientId}){
     stage==="translating"&&e("div",{style:{...cardStyle(),textAlign:"center",padding:isCompact?"48px 20px":"64px 32px",animation:"fadeUp 0.25s ease"}},
       e("div",{style:{marginBottom:20}},e(Spinner,{size:26})),
       e("div",{className:"lc-display",style:{fontSize:24,color:C.text,marginBottom:8}},"AI is translating…"),
-      e("div",{style:st.muted},"Processing your text with our language model")
+      e("div",{style:st.muted},busyNote||"Processing your text with our language model")
     ),
 
     stage==="checking"&&e("div",{style:{...cardStyle(),textAlign:"center",padding:isCompact?"48px 20px":"64px 32px",animation:"fadeUp 0.25s ease"}},
       e("div",{style:{marginBottom:20}},e(Spinner,{size:26})),
       e("div",{className:"lc-display",style:{fontSize:24,color:C.text,marginBottom:8}},"Checking against the source…"),
-      e("div",{style:st.muted},"Our AI is comparing the translation with the English source")
+      e("div",{style:st.muted},"Our AI is comparing the translation with the "+sourceLanguage+" source")
     ),
 
     stage==="checked"&&e("div",{style:{animation:"fadeUp 0.25s ease"}},
@@ -1562,14 +1798,16 @@ function ClientView({clientId}){
         e("div",{style:{background:C.soft,border:`1px solid ${C.border}`,borderRadius:10,padding:"12px 16px",marginBottom:16,fontSize:12,color:C.muted,lineHeight:1.55}},
           (aiResult.trim() && aiResult.trim()!==inputText.trim())
             ?"LingoCheck changed parts of this translation. The reviewer sees those changes highlighted, and can open your original wording from each highlight."
-            :"LingoCheck kept your wording. A reviewer will still proofread it against the English source.",
+            :"LingoCheck kept your wording. A reviewer will still proofread it against the "+sourceLanguage+" source.",
           qaSourceName?e("div",{style:{marginTop:6}},"Source: ",qaSourceName):null
         ),
         e("label",{style:{...st.label,marginBottom:8}},"Email for delivery"),
         e("input",{type:"email",autoComplete:"email",placeholder:"you@example.com",value:clientEmail,onChange:ev=>setClientEmail(ev.target.value),style:{...st.ta,minHeight:0,resize:"none",marginBottom:8,padding:"10px 14px"}}),
         e("div",{style:{fontSize:12,color:C.muted,marginBottom:16,lineHeight:1.5}},"We’ll send the reviewed file to this address when it’s ready."),
-        e("button",{onClick:()=>handleSend({qaOnly:true}),style:{...st.btn,width:"100%",padding:14,background:C.green,fontSize:15,color:C.white}},
-          "✓ Approve & Send to Revisor  ·  ",e("span",{style:{opacity:0.8,fontSize:12}},"demo: skip payment")
+        e("div",{style:{fontSize:12,color:C.muted,marginBottom:16,lineHeight:1.5}},extraDelivery.length?"We’ll email the checked file and each extra language to this address.":"We’ll send the reviewed file to this address when it’s ready."),
+        e("button",{onClick:()=>handleSend({qaOnly:true}),disabled:sending,style:{...st.btn,width:"100%",padding:14,background:C.green,fontSize:15,color:C.white,opacity:sending?0.7:1}},
+          sending?(busyNote||"Sending…"):(extraDelivery.length?("✓ Send the check and "+extraDelivery.join(" + ")+"  ·  "):"✓ Approve & Send to Revisor  ·  "),
+          !sending&&e("span",{style:{opacity:0.8,fontSize:12}},"demo: skip payment")
         ),
         error&&e("div",{style:{fontSize:12,color:C.error,marginTop:12}},error)
       ),
@@ -1598,7 +1836,7 @@ function ClientView({clientId}){
       e("div",{style:{...cardStyle(),border:`1px solid rgba(109,79,216,0.28)`,marginBottom:16}},
         e("div",{style:{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:12}},
           e("span",{style:st.label},"AI Translation — ",language),
-          e("span",{style:{fontSize:12,fontWeight:500,background:C.soft,border:`1px solid ${C.border}`,color:C.muted,borderRadius:8,padding:"4px 10px"}},"AI draft")
+          e("span",{style:st.label},"AI Translation — ",deliveryCount>1?selectedLanguages.join(", "):language),
         ),
         e("div",{style:{display:"grid",gridTemplateColumns:isCompact?"1fr":"repeat(3, 1fr)",gap:10,marginBottom:12}},
           [
@@ -1621,11 +1859,24 @@ function ClientView({clientId}){
           e("div",{style:{fontSize:11,color:C.muted,marginTop:4}},"Versus the typical agency rate for this job")
         ),
         e("div",{style:{background:C.amberBg,border:`1px solid ${C.amberBorder}`,borderRadius:10,padding:"12px 16px",marginBottom:16,fontSize:12,color:C.amber,lineHeight:1.55}},"This is an AI draft. Once you approve, a revisor will check and refine every word."),
-        e("label",{style:{...st.label,marginBottom:8}},"Email for delivery"),
+        e("div",{style:{background:C.amberBg,border:`1px solid ${C.amberBorder}`,borderRadius:10,padding:"12px 16px",marginBottom:16,fontSize:12,color:C.amber,lineHeight:1.55}},deliveryCount>1?"These are AI drafts. Once you approve, a revisor checks each language separately.":"This is an AI draft. Once you approve, a revisor will check and refine every word."),
+        deliveryCount>1&&e("div",{style:{display:"flex",gap:8,flexWrap:"wrap",marginBottom:14}},
+          selectedLanguages.filter(lang=>drafts[lang]).map(lang=>e("button",{
+            key:lang,type:"button","aria-pressed":language===lang,
+            onClick:()=>{
+              setLanguage(lang);
+              setAiResult((drafts[lang]&&drafts[lang].translation)||"");
+              if(sentencePackRef.current) sentencePackRef.current={...sentencePackRef.current, translationSentences:(drafts[lang]&&drafts[lang].translationSentences)||null};
+            },
+            style:{...st.btn,padding:"6px 12px",fontSize:12,background:language===lang?C.accent:"transparent",color:language===lang?C.white:C.muted,border:`1px solid ${language===lang?C.accent:C.border}`}
+          },lang))
+        ),
         e("input",{type:"email",autoComplete:"email",placeholder:"you@example.com",value:clientEmail,onChange:ev=>setClientEmail(ev.target.value),style:{...st.ta,minHeight:0,resize:"none",marginBottom:8,padding:"10px 14px"}}),
         e("div",{style:{fontSize:12,color:C.muted,marginBottom:16,lineHeight:1.5}},"We’ll send the reviewed file to this address when it’s ready."),
-        e("button",{onClick:handleSend,style:{...st.btn,width:"100%",padding:14,background:C.green,fontSize:15,color:C.white}},
-          "✓ Approve & Send to Revisor  ·  ",e("span",{style:{opacity:0.8,fontSize:12}},"demo: skip payment")
+        e("div",{style:{fontSize:12,color:C.muted,marginBottom:16,lineHeight:1.5}},deliveryCount>1?"We’ll email each finished language to this address.":"We’ll send the reviewed file to this address when it’s ready."),
+        e("button",{onClick:handleSend,disabled:sending,style:{...st.btn,width:"100%",padding:14,background:C.green,fontSize:15,color:C.white,opacity:sending?0.7:1}},
+          sending?(busyNote||"Sending…"):(deliveryCount>1?("✓ Send "+deliveryCount+" languages  ·  "):"✓ Approve & Send to Revisor  ·  "),
+          !sending&&e("span",{style:{opacity:0.8,fontSize:12}},"demo: skip payment")
         ),
         error&&e("div",{style:{fontSize:12,color:C.error,marginTop:12}},error)
       ),
@@ -1637,7 +1888,7 @@ function ClientView({clientId}){
         showFullDraft
           ?e("div",{style:{display:"grid",gridTemplateColumns:isWide?"1fr 1fr":"1fr",gap:14}},
             e("div",null,
-              e("div",{style:{fontSize:12,color:C.muted,marginBottom:8}},"Original — English"),
+              e("div",{style:{fontSize:12,color:C.muted,marginBottom:8}},"Original — ",sourceLanguage),
               e("div",{style:{fontSize:13,color:C.muted,lineHeight:1.75,whiteSpace:"pre-wrap",maxHeight:280,overflow:"auto",padding:12,border:`1px solid ${C.border}`,borderRadius:10,background:C.soft}},inputText)
             ),
             e("div",null,
@@ -1661,13 +1912,27 @@ function ClientView({clientId}){
           ?"Someone has claimed your job and is carefully going through the text."
           :(currentJob?.qaOnly
             ?"Your translation is in the queue. A certified translator will proofread every word."
-            :"Your draft is in the queue. A revisor will check and refine it."),
-        " We’ll email ",
+            :(bundleJobs.length>1
+              ?"Each language is reviewed separately. We’ll email you as each file is ready."
+              :"Your draft is in the queue. A revisor will check and refine it.")),
         e("strong",{style:{color:C.text}},currentJob?.clientEmailMasked||"you"),
         " when it’s ready — feel free to close this page."
       ),
       e("div",{style:{display:"flex",alignItems:"center",justifyContent:"center",gap:8,color:C.muted,fontSize:12}},
-        e("span",{style:{width:7,height:7,borderRadius:"50%",background:C.accent,display:"inline-block",animation:"pulse 1.5s ease-in-out infinite"}}),
+      bundleJobs.length>1&&e("div",{style:{textAlign:"left",maxWidth:460,margin:"8px auto 0"}},
+        bundleJobs.map(job=>e("div",{key:job.id,style:{display:"flex",alignItems:"center",justifyContent:"space-between",gap:12,padding:"12px 0",borderTop:`1px solid ${C.border}`}},
+          e("div",null,
+            e("div",{style:{fontSize:14,fontWeight:600,color:C.text}},job.language),
+            e("div",{style:{fontSize:12,color:C.muted,marginTop:2}},job.status==="complete"?"Ready to download":(job.status==="in_progress"?"A revisor is working on it":"Waiting for a revisor"))
+          ),
+          job.status==="complete"&&e("button",{onClick:async()=>{
+            try{ await downloadTranslated(job); }
+            catch(err){ setError("Could not download file: "+(err.message||"Unknown error")); }
+          },style:{...st.btn,background:C.soft,border:`1px solid ${C.border}`,color:C.text,padding:"8px 14px",fontSize:12}},"Download")
+        ))
+      ),
+      ),
+      e("div",{style:{display:"flex",alignItems:"center",justifyContent:"center",gap:8,color:C.muted,fontSize:12,marginTop:18}},
         "Checking for updates every few seconds…"
       )
     ),
@@ -1695,22 +1960,23 @@ function ClientView({clientId}){
         )
       ),
       e("div",{style:{...cardStyle(),border:`1px solid ${C.greenBorder}`,marginBottom:14}},
+      (bundleJobs.length?bundleJobs:[currentJob]).map(job=>e("div",{key:job.id,style:{...cardStyle(),border:`1px solid ${C.greenBorder}`,marginBottom:14}},
         e("div",{style:{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:14}},
-          e("span",{style:st.label},"Final Translation — ",currentJob.language),
+          e("span",{style:st.label},"Final Translation — ",job.language),
           e("span",{style:{fontSize:11,background:C.greenBg,border:`1px solid ${C.greenBorder}`,color:C.green,borderRadius:20,padding:"3px 10px"}},"✓ Human reviewed")
         ),
-        e("div",{style:{fontSize:14,lineHeight:1.8,color:C.text,whiteSpace:"pre-wrap",marginBottom:18}},currentJob.revisedTranslation),
+        e("div",{style:{fontSize:14,lineHeight:1.8,color:C.text,whiteSpace:"pre-wrap",marginBottom:18}},job.revisedTranslation),
         e("div",{style:{display:"flex",gap:10,flexWrap:"wrap"}},
-          e("button",{onClick:()=>navigator.clipboard.writeText(currentJob.revisedTranslation),style:{...st.btn,background:"transparent",border:`1px solid ${C.border}`,color:C.muted,padding:"8px 16px",fontSize:12,flex:isCompact?"1 1 100%":"0 0 auto"}},isCompact?"Copy":"Copy translation"),
+          e("button",{onClick:()=>navigator.clipboard.writeText(job.revisedTranslation||""),style:{...st.btn,background:"transparent",border:`1px solid ${C.border}`,color:C.muted,padding:"8px 16px",fontSize:12,flex:isCompact?"1 1 100%":"0 0 auto"}},isCompact?"Copy":"Copy translation"),
           e("button",{onClick:async()=>{
-            try{ await downloadTranslated(); }
+            try{ await downloadTranslated(job); }
             catch(err){ setError("Could not download file: "+(err.message||"Unknown error")); }
-          },style:{...st.btn,background:C.soft,border:`1px solid ${C.border}`,color:C.muted,padding:"8px 16px",fontSize:12,flex:isCompact?"1 1 100%":"0 0 auto"}},isCompact?"Download file":"Download translated file")
-        ),
-        downloadNote&&e("div",{style:{fontSize:12,color:C.muted,lineHeight:1.55,marginTop:12,padding:"10px 12px",background:C.soft,border:`1px solid ${C.border}`,borderRadius:10}},downloadNote),
-        error&&e("div",{style:{fontSize:12,color:C.error,marginTop:12}},error)
-      ),
-      e("button",{onClick:handleReset,style:{...st.btn,background:"transparent",border:`1px solid ${C.border}`,color:C.muted,padding:"8px 16px",fontSize:12}},"← Check another translation")
+          },style:{...st.btn,background:C.soft,border:`1px solid ${C.border}`,color:C.muted,padding:"8px 16px",fontSize:12,flex:isCompact?"1 1 100%":"0 0 auto"}},isCompact?"Download file":("Download "+(job.language||"file")))
+        )
+      )),
+      downloadNote&&e("div",{style:{fontSize:12,color:C.muted,lineHeight:1.55,marginTop:12,padding:"10px 12px",background:C.soft,border:`1px solid ${C.border}`,borderRadius:10}},downloadNote),
+      error&&e("div",{style:{fontSize:12,color:C.error,marginTop:12}},error),
+    ),
     ),
 
     e("div",{style:{textAlign:"center",marginTop:88,paddingBottom:48,fontSize:14,color:C.muted,letterSpacing:"-0.2px"}},"Made for careful translations — with a human in the loop.")
