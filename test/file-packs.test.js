@@ -35,6 +35,7 @@ test("a docx job can keep a pack id instead of the file bytes", function () {
     clientId: "client1",
     language: "Dutch",
     clientEmail: "reader@example.com",
+    privacyAccepted: true,
     originalText: "The garden is open.",
     aiTranslation: "De tuin is open.",
     sourceFile: { name: "garden.docx", ext: "docx", packId }
@@ -77,6 +78,7 @@ test("a dutch source can be checked as an english translation", function () {
     language: "English",
     qaOnly: true,
     clientEmail: "reader@example.com",
+    privacyAccepted: true,
     originalText: "Neem een schort mee.",
     customerTranslation: "Bring an apron.",
     aiTranslation: "Bring an apron."
@@ -89,6 +91,7 @@ test("a dutch source can be checked as an english translation", function () {
     sourceLanguage: "Dutch",
     language: "Dutch",
     clientEmail: "reader@example.com",
+    privacyAccepted: true,
     originalText: "Neem een schort mee.",
     aiTranslation: "Neem een schort mee."
   }, {}), /different/);
@@ -101,6 +104,7 @@ test("jobs from one source file share a bundle id", function () {
     language: "Spanish",
     bundleId,
     clientEmail: "reader@example.com",
+    privacyAccepted: true,
     originalText: "The garden is open.",
     aiTranslation: "El jardin esta abierto."
   }, {});
@@ -111,9 +115,53 @@ test("jobs from one source file share a bundle id", function () {
     language: "German",
     bundleId: "../not-a-bundle",
     clientEmail: "reader@example.com",
+    privacyAccepted: true,
     originalText: "The garden is open.",
     aiTranslation: "Der Garten ist offen."
   }, {});
   assert.equal(stray.bundleId, null);
   assert.equal(security.publicJob(stray).bundleId, undefined);
+});
+
+test("a job requires the privacy notice to be accepted", function () {
+  assert.throws(() => security.buildClientJob({
+    clientId: "client1",
+    language: "Dutch",
+    clientEmail: "reader@example.com",
+    originalText: "The garden is open.",
+    aiTranslation: "De tuin is open."
+  }, {}), /privacy notice/);
+});
+
+test("languages Claude translates strongly are accepted", function () {
+  for (const language of ["French", "Italian", "Portuguese", "Arabic", "Chinese", "Hindi", "Indonesian", "Japanese", "Korean"]) {
+    const job = security.buildClientJob({
+      clientId: "client1",
+      language,
+      sourceLanguage: "English",
+      clientEmail: "reader@example.com",
+      privacyAccepted: true,
+      originalText: "The garden is open.",
+      aiTranslation: "Translated."
+    }, {});
+    assert.equal(job.language, language);
+  }
+  assert.throws(() => security.buildClientJob({
+    clientId: "client1",
+    language: "Klingon",
+    clientEmail: "reader@example.com",
+    privacyAccepted: true,
+    originalText: "The garden is open.",
+    aiTranslation: "Translated."
+  }, {}), /Unsupported language/);
+});
+
+test("a revisor only sees queued jobs in the languages they chose", function () {
+  assert.deepEqual(security.sanitizeLanguageList(["French", "French", "Klingon", "Dutch"]), ["French", "Dutch"]);
+  assert.equal(security.revisorCanSeeQueuedJob(["Dutch", "French"], "French"), true);
+  assert.equal(security.revisorCanSeeQueuedJob(["Dutch", "French"], "Japanese"), false);
+  assert.equal(security.revisorCanSeeQueuedJob([], "Japanese"), true);
+  assert.equal(security.revisorCanSeeQueuedJob(null, "Dutch"), true);
+  assert.equal(security.sanitizePhone("+31 6 12345678"), "+31 6 12345678");
+  assert.equal(security.sanitizePhone("123"), null);
 });

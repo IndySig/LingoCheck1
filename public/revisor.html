@@ -5,6 +5,16 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>LingoCheck — Revisor Panel</title>
 <script src="text-segments.js"></script>
+<script src="doc-extract.js"></script>
+<script src="file-rebuild.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/pdf-lib/1.17.1/pdf-lib.min.js"></script>
+<script src="vendor/docx-preview.min.js"></script>
+<script type="module">
+  import * as pdfjsLib from "https://cdnjs.cloudflare.com/ajax/libs/pdf.js/4.8.69/pdf.min.mjs";
+  pdfjsLib.GlobalWorkerOptions.workerSrc = "https://cdnjs.cloudflare.com/ajax/libs/pdf.js/4.8.69/pdf.worker.min.mjs";
+  window.pdfjsLib = pdfjsLib;
+</script>
 <script src="vendor/diff-match-patch.js"></script>
 <script src="char-diff.js"></script>
 <script src="vendor/diff.js"></script>
@@ -107,6 +117,7 @@
     box-shadow:0 0 0 3px rgba(109,79,216,0.18);
     background:#ffffff;
   }
+  .docx-wrapper{background:#f6f3ee!important;padding:16px!important;}
 </style>
 </head>
 <body>
@@ -357,8 +368,8 @@ function MarkedTranslation({customerText, checkedText}){
 }
 
 function sourceName(job){
-  const name = String(job && job.sourceLanguage || "English");
-  return ["English","Dutch","Spanish","German"].includes(name) ? name : "English";
+  const name = String(job && job.sourceLanguage || "").trim();
+  return name || "English";
 }
 function pairLabel(job){
   if(!job) return "";
@@ -366,7 +377,7 @@ function pairLabel(job){
 }
 function shortLang(language){
   const name = String(language || "").trim().toLowerCase();
-  const known = {dutch:"NL",nederlands:"NL",english:"EN",german:"DE",deutsch:"DE",french:"FR",spanish:"ES",italian:"IT",portuguese:"PT"};
+  const known = {dutch:"NL",nederlands:"NL",english:"EN",german:"DE",deutsch:"DE",french:"FR",spanish:"ES",italian:"IT",portuguese:"PT",arabic:"AR",chinese:"ZH",hindi:"HI",indonesian:"ID",japanese:"JA",korean:"KO"};
   if(known[name]) return known[name];
   if(/^[a-z]{2}([-_][a-z]{2})?$/i.test(name)) return name.slice(0, 2).toUpperCase();
   return "";
@@ -423,6 +434,17 @@ function isQueuedJob(job){
   return isStaleClaim(job);
 }
 
+function offeredLanguages(me){
+  const list = me && Array.isArray(me.languages) ? me.languages : [];
+  return list.filter(function(lang, index){ return lang && list.indexOf(lang)===index; });
+}
+
+function jobInOfferedLanguages(job, me){
+  const offered = offeredLanguages(me);
+  if(!offered.length) return true;
+  return offered.indexOf(job && job.language)!==-1;
+}
+
 function formatWaiting(ts){
   const ms = Math.max(0, Date.now()-(ts||0));
   const m = Math.floor(ms/60000);
@@ -447,6 +469,7 @@ function RevisorApp(){
   const[tab,setTab]=useState("queue"); // queue | mine | finance
   const[focusJobId,setFocusJobId]=useState(null);
   const[payoutRate,setPayoutRate]=useState(2.5);
+  const[offerLanguages,setOfferLanguages]=useState([]);
 
   const refresh=useCallback(async()=>{
     try{
@@ -467,6 +490,7 @@ function RevisorApp(){
         try{
           const cfg=await apiFetch("/api/public-config");
           if(!cancelled && typeof cfg.payoutPerWordCents==="number") setPayoutRate(cfg.payoutPerWordCents);
+          if(!cancelled && Array.isArray(cfg.languages)) setOfferLanguages(cfg.languages);
         }catch{}
         setReady(true);
         refresh();
@@ -508,11 +532,11 @@ function RevisorApp(){
   }
   if(!ready||!me){
     return React.createElement("div",{style:{maxWidth:640,margin:"0 auto",padding:"60px 20px",textAlign:"center"}},
-      React.createElement("div",{style:{...st.card}},React.createElement(Spinner,{size:24}),React.createElement("div",{style:{marginTop:10,fontSize:13,color:C.muted}},"Loading revisor panel…"))
+      React.createElement("div",{style:{...st.card}},React.createElement(Spinner,{size:24}),React.createElement("div",{style:{marginTop:10,fontSize:13,color:C.muted}},"Loading…"))
     );
   }
 
-  return React.createElement(RevisorView,{me,allJobs,tab,setTab,updateJob,claimJob,unclaimJob,focusJobId,setFocusJobId,payoutRate,onLogout:logout});
+  return React.createElement(RevisorView,{me,setMe,allJobs,tab,setTab,updateJob,claimJob,unclaimJob,focusJobId,setFocusJobId,payoutRate,offerLanguages,onLogout:logout});
 }
 
 function Header({me,tab,setTab,onLogout,counts,isCompact}){
@@ -528,12 +552,14 @@ function Header({me,tab,setTab,onLogout,counts,isCompact}){
     e("div",{className:"lc-nav-pill",style:{borderRadius:isCompact?24:999,padding:isCompact?"12px":"10px 14px",display:"flex",alignItems:isCompact?"stretch":"center",justifyContent:"space-between",gap:12,flexDirection:isCompact?"column":"row"}},
       e("div",{style:{paddingLeft:isCompact?4:6}},
         e("div",{className:"lc-display",style:{fontSize:isCompact?20:22,fontWeight:600,color:C.text,letterSpacing:"-0.02em"}},"Lingo",e("span",{style:{color:C.accent}},"Check")),
-        e("div",{style:{fontSize:13,color:C.muted,marginTop:2,wordBreak:"break-word"}},"Reviewer · ",e("span",{style:{color:C.text}},me.displayName||me.email||me.username))
+        e("div",{style:{fontSize:13,color:C.muted,marginTop:2,wordBreak:"break-word"}},"Revisor · ",e("span",{style:{color:C.text}},me.displayName||me.email||me.username))
       ),
       e("div",{style:{display:"flex",alignItems:"center",gap:8,flexWrap:"wrap",width:isCompact?"100%":"auto"}},
         tabBtn("queue","Queue",counts.queue),
         tabBtn("mine","My jobs",counts.mine),
         tabBtn("finance","Finance"),
+        tabBtn("account","Account"),
+        e("a",{href:"/privacy",style:{...st.btn,background:"rgba(255,255,255,0.7)",border:`1px solid ${C.border}`,color:C.muted,fontSize:12,padding:"8px 14px",textDecoration:"none",flex:isCompact?"1 1 100%":"0 0 auto"}},"Privacy"),
         e("button",{onClick:onLogout,style:{...st.btn,background:"rgba(255,255,255,0.7)",border:`1px solid ${C.border}`,color:C.muted,fontSize:12,padding:"8px 14px",flex:isCompact?"1 1 100%":"0 0 auto"}},"Log out")
       )
     )
@@ -547,16 +573,19 @@ function QueueTab({me,allJobs,claimJob,setTab,setFocusJobId,isCompact,payoutRate
   const [langFilter,setLangFilter]=useState("all");
 
   const languages=useMemo(()=>{
+    const offered=offeredLanguages(me);
+    if(offered.length) return offered.slice().sort();
     const set=new Set();
     allJobs.forEach(j=>{ if(isQueuedJob(j) && j.language) set.add(j.language); });
     return Array.from(set).sort();
-  },[allJobs]);
+  },[allJobs,me]);
 
   const queue=useMemo(()=>allJobs
     .filter(isQueuedJob)
+    .filter(j=>jobInOfferedLanguages(j, me))
     .filter(j=>langFilter==="all"||j.language===langFilter)
     .sort((a,b)=>(a.createdAt||0)-(b.createdAt||0))
-  ,[allJobs,langFilter]);
+  ,[allJobs,langFilter,me]);
 
   async function onClaim(id){
     setErr("");
@@ -572,14 +601,14 @@ function QueueTab({me,allJobs,claimJob,setTab,setFocusJobId,isCompact,payoutRate
     }
   }
 
-  if(queue.length===0 && langFilter==="all"){
+  if(queue.length===0 && langFilter==="all" && !languages.length){
     return e("div",{style:{textAlign:"center",padding:"80px 0"}},
       e("div",{style:{fontSize:40,marginBottom:18}},"✓"),
       e("div",{className:"lc-display",style:{fontSize:24,color:C.text,marginBottom:8}},"No jobs waiting"),
       e("div",{style:st.muted},"New unclaimed requests will appear here automatically"),
       e("div",{style:{display:"flex",alignItems:"center",justifyContent:"center",gap:8,marginTop:18,fontSize:11,color:C.muted}},
         e("span",{style:{width:6,height:6,borderRadius:"50%",background:C.accent,display:"inline-block",animation:"pulse 1.5s ease-in-out infinite"}}),
-        "Listening for new requests…"
+        "Checking for new jobs…"
       )
     );
   }
@@ -594,7 +623,7 @@ function QueueTab({me,allJobs,claimJob,setTab,setFocusJobId,isCompact,payoutRate
     ),
     err&&e("div",{style:{margin:"0 0 12px",fontSize:12,color:"#c43d3d"}},err),
     queue.length===0
-      ?e("div",{style:{...st.card,textAlign:"center",padding:36,color:C.muted,fontSize:13}},"No open jobs for this language filter.")
+      ?e("div",{style:{...st.card,textAlign:"center",padding:36,color:C.muted,fontSize:13}},langFilter==="all"?"No jobs waiting in your languages.":"No open jobs for this language.")
       :e("div",{style:{display:"grid",gridTemplateColumns:"1fr",gap:12}},
         queue.map(job=>{
           const payout=jobPayoutCents(job, payoutRate);
@@ -605,7 +634,7 @@ function QueueTab({me,allJobs,claimJob,setTab,setFocusJobId,isCompact,payoutRate
                 pairLabel(job),
                 job.qaOnly&&e("span",{style:{fontSize:11,fontWeight:500,color:C.muted,background:C.soft,border:`1px solid ${C.border}`,padding:"2px 8px",borderRadius:8}},"QA only"),
                 aiChangedTranslation(job)&&e("span",{style:{fontSize:11,fontWeight:500,color:C.accent,background:C.lilac,border:"1px solid rgba(109,79,216,0.28)",padding:"2px 8px",borderRadius:8}},"AI changes"),
-                stale&&e("span",{style:{fontSize:11,fontWeight:500,color:C.amber,background:C.amberBg,border:`1px solid ${C.amberBorder}`,padding:"2px 8px",borderRadius:8}},"Stale — reclaim"),
+                stale&&e("span",{style:{fontSize:11,fontWeight:500,color:C.amber,background:C.amberBg,border:`1px solid ${C.amberBorder}`,padding:"2px 8px",borderRadius:8}},"Claim expired"),
                 typeof job.sourceWordCount==="number"&&e("span",{style:{fontSize:11,fontWeight:500,color:C.muted}}, job.sourceWordCount," words · ",fmtEur(payout))
               ),
               e("div",{style:{fontSize:12,color:C.muted,lineHeight:1.6,maxHeight:60,overflow:"hidden"}},(()=>{const preview=jobPreviewText(job);return preview.substring(0,260)+(preview.length>260?"…":"");})()),
@@ -739,6 +768,12 @@ function ReviewEditor({selectedJob,updateJob,unclaimJob,onDone,onReleased,isComp
   const[propagateHighlights,setPropagateHighlights]=useState({});
   const focusSnapRef=useRef(null);
   const jumpFocusIndexRef=useRef(null);
+  const pendingSendFocusRef=useRef(null);
+  const[sendGate,setSendGate]=useState(false);
+  const[preview,setPreview]=useState(null);
+  const previewBlobRef=useRef(null);
+  const previewBusyRef=useRef(false);
+  const previewBoxRef=useRef(null);
   const applyingPropagateRef=useRef(false);
   const propagatedSkipRef=useRef(null);
   const[isWide,setIsWide]=useState(()=>window.matchMedia && window.matchMedia("(min-width: 900px)").matches);
@@ -754,6 +789,57 @@ function ReviewEditor({selectedJob,updateJob,unclaimJob,onDone,onReleased,isComp
     if(mode !== "sentences") return;
     document.querySelectorAll("textarea.sentence-target").forEach(growSentenceField);
   },[mode, editedSentences]);
+
+  useEffect(function(){
+    if(mode !== "sentences") return;
+    const idx = pendingSendFocusRef.current;
+    if(idx == null) return;
+    pendingSendFocusRef.current = null;
+    focusRepeat(idx);
+  },[mode, sendGate]);
+
+  useEffect(function(){
+    if(!sendGate || !editedSentences.length) return;
+    for(let i = 0; i < editedSentences.length; i++){
+      if(sentenceStatus[i] !== "checked") return;
+    }
+    setSendGate(false);
+  },[sendGate, sentenceStatus, editedSentences]);
+
+  useEffect(function(){
+    if(!preview) return;
+    function onKey(ev){
+      if(ev.key !== "Escape") return;
+      ev.stopImmediatePropagation();
+      setPreview(null);
+    }
+    document.addEventListener("keydown", onKey, true);
+    return function(){ document.removeEventListener("keydown", onKey, true); };
+  },[preview]);
+
+  useEffect(function(){
+    if(!preview || preview.phase !== "ready" || preview.kind === "text") return;
+    let cancel = false;
+    const box = previewBoxRef.current;
+    const blob = previewBlobRef.current;
+    (async function(){
+      try{
+        if(!box || !blob) throw new Error("Could not build the preview.");
+        box.innerHTML = "";
+        if(preview.kind === "docx"){
+          if(!window.docx || typeof docx.renderAsync !== "function") throw new Error("Word preview is not available");
+          await docx.renderAsync(blob, box, null, { inWrapper:true, useBase64URL:true });
+        }else if(preview.kind === "pdf"){
+          await drawPdfPreview(blob, box);
+        }
+      }catch(err){
+        if(cancel) return;
+        try{ downloadPreviewBlob(blob, preview.filename); }catch(e){}
+        setPreview({ phase:"error", message:"Couldn't show the file here. It was downloaded instead." });
+      }
+    })();
+    return function(){ cancel = true; };
+  },[preview]);
 
   useEffect(function(){
     if(!propagateBar || (propagateBar.phase !== "review" && propagateBar.phase !== "browse")) return;
@@ -822,6 +908,7 @@ function ReviewEditor({selectedJob,updateJob,unclaimJob,onDone,onReleased,isComp
       setMode("sentences");
     }
     setSavedNote("");
+    setPreview(null);
   },[selectedJob.id]);
 
   function draftPayload(){
@@ -1231,6 +1318,21 @@ function ReviewEditor({selectedJob,updateJob,unclaimJob,onDone,onReleased,isComp
   }
 
   async function handleSend(){
+    const unchecked = [];
+    for(let i = 0; i < editedSentences.length; i++){
+      if(sentenceStatus[i] !== "checked") unchecked.push(i);
+    }
+    if(unchecked.length){
+      setSendGate(true);
+      if(mode !== "sentences"){
+        pendingSendFocusRef.current = unchecked[0];
+        setMode("sentences");
+      }else{
+        focusRepeat(unchecked[0]);
+      }
+      return;
+    }
+    setSendGate(false);
     const { finalText, patch } = draftPayload();
     if(!finalText) return;
     setSending(true);
@@ -1257,15 +1359,137 @@ function ReviewEditor({selectedJob,updateJob,unclaimJob,onDone,onReleased,isComp
     }
   }
 
+  function downloadPreviewBlob(blob, filename){
+    if(!blob) return;
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = filename || "preview";
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    setTimeout(function(){ URL.revokeObjectURL(url); }, 1500);
+  }
+
+  function openPreviewTab(){
+    const blob = previewBlobRef.current;
+    if(!blob) return;
+    const url = URL.createObjectURL(blob);
+    const opened = window.open(url, "_blank");
+    if(!opened) downloadPreviewBlob(blob, preview && preview.filename);
+  }
+
+  async function drawPdfPreview(blob, box){
+    if(!window.pdfjsLib) throw new Error("PDF support not loaded");
+    const data = new Uint8Array(await blob.arrayBuffer());
+    const pdf = await pdfjsLib.getDocument({ data: data }).promise;
+    box.innerHTML = "";
+    for(let i = 1; i <= pdf.numPages; i++){
+      const page = await pdf.getPage(i);
+      const viewport = page.getViewport({ scale: 1.2 });
+      const canvas = document.createElement("canvas");
+      canvas.width = viewport.width;
+      canvas.height = viewport.height;
+      canvas.style.display = "block";
+      canvas.style.width = "100%";
+      canvas.style.height = "auto";
+      canvas.style.margin = "0 auto 12px";
+      canvas.style.background = "#ffffff";
+      box.appendChild(canvas);
+      await page.render({ canvasContext: canvas.getContext("2d"), viewport: viewport }).promise;
+    }
+  }
+
+  async function fetchPreviewBlob(body){
+    const r = await fetch("/api/revisor/jobs/"+encodeURIComponent(selectedJob.id)+"/preview", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body)
+    });
+    if(!r.ok){
+      const data = await r.json().catch(function(){ return {}; });
+      throw new Error(data.error || "Could not build the preview.");
+    }
+    return await r.blob();
+  }
+
+  async function openFilePreview(){
+    if(previewBusyRef.current) return;
+    const loaded = String(selectedJob.revisedTranslation || selectedJob.aiTranslation || "").trim();
+    const typed = String(editedText || "").trim();
+    const fromSentences = editedSentences.length
+      ? String(sentencesToParagraphText(editedSentences, sentenceParaMap, paragraphCount) || "").trim()
+      : "";
+    const boxEdited = !!(typed && typed !== loaded);
+    const sentenceEdited = !!(fromSentences && fromSentences !== loaded);
+    const text = mode==="sentences" ? (fromSentences || typed) : (boxEdited ? typed : (sentenceEdited ? fromSentences : typed));
+    if(!text){
+      setPreview({ phase:"error", message:"Nothing to preview yet." });
+      return;
+    }
+    const ext = String(selectedJob.sourceFile && selectedJob.sourceFile.ext || "txt").toLowerCase();
+    const base = String((selectedJob.sourceFile && selectedJob.sourceFile.name) || "translation").replace(/\.[^.]+$/, "");
+    const fullTextEdited = mode!=="sentences" && boxEdited;
+    previewBusyRef.current = true;
+    previewBlobRef.current = null;
+    setPreview({ phase:"loading" });
+    try{
+      if(ext === "txt" || ext === "md"){
+        previewBlobRef.current = new Blob([text], { type:"text/plain;charset=utf-8" });
+        setPreview({ phase:"ready", kind:"text", text:text, filename:base+"-preview."+ext });
+        return;
+      }
+      if(ext === "docx" && selectedJob.sourceFile && selectedJob.sourceFile.packId){
+        const body = { fullText: text };
+        if(!fullTextEdited && editedSentences.length) body.translations = editedSentences.map(function(s){ return String(s || ""); });
+        const blob = await fetchPreviewBlob(body);
+        previewBlobRef.current = blob;
+        setPreview({ phase:"ready", kind:"docx", filename:base+"-preview.docx" });
+        return;
+      }
+      if(ext === "docx" || ext === "pdf"){
+        const source = await apiFetch("/api/revisor/jobs/"+encodeURIComponent(selectedJob.id)+"/source");
+        const segments = selectedJob.originalSegments || null;
+        if(ext === "docx"){
+          const blob = await makeStyledDocxBlobFromTemplate(source.fileB64, text, segments);
+          previewBlobRef.current = blob;
+          setPreview({ phase:"ready", kind:"docx", filename:base+"-preview.docx" });
+          return;
+        }
+        const result = await makeStyledPdfBlobFromTemplate(source.fileB64, text, segments);
+        const blob = result && result.blob ? result.blob : result;
+        previewBlobRef.current = blob;
+        setPreview({ phase:"ready", kind:"pdf", filename:base+"-preview.pdf" });
+        return;
+      }
+      setPreview({ phase:"error", message:"This file type can't be previewed." });
+    }catch(err){
+      setPreview({ phase:"error", message: err.message || "Could not build the preview." });
+    }finally{
+      previewBusyRef.current = false;
+    }
+  }
+
   const paneHeight = isWide ? 420 : (isCompact ? 260 : 320);
   const payoutHint = fmtEur(jobPayoutCents(selectedJob, payoutRate));
+  let uncheckedLeft = 0;
+  if(sendGate){
+    for(let i = 0; i < editedSentences.length; i++){
+      if(sentenceStatus[i] !== "checked") uncheckedLeft++;
+    }
+  }
 
   return e("div",{style:{animation:"fadeUp 0.25s ease"}},
     e("div",{style:{display:"flex",alignItems:"center",justifyContent:"space-between",gap:10,marginBottom:10,flexWrap:"wrap"}},
       e("span",{style:{...st.label,marginBottom:0}},selectedJob.qaOnly?"Review source and checked translation":"Review & edit translation"),
-      e("div",{style:{fontSize:12,color:C.muted}},
-        typeof selectedJob.sourceWordCount==="number"?selectedJob.sourceWordCount+" words · ":"",
-        "payout ",payoutHint
+      e("div",{style:{display:"flex",alignItems:"center",gap:10,flexWrap:"wrap"}},
+        e("button",{type:"button",onClick:openFilePreview,disabled:!!(preview&&preview.phase==="loading"),style:{...st.btn,fontSize:12,padding:"6px 12px",background:"#ffffff",border:`1px solid ${C.border}`,color:C.text}},
+          preview&&preview.phase==="loading"?"Preparing preview…":"Preview file"
+        ),
+        e("div",{style:{fontSize:12,color:C.muted}},
+          typeof selectedJob.sourceWordCount==="number"?selectedJob.sourceWordCount+" words · ":"",
+          "Payout ",payoutHint
+        )
       )
     ),
     selectedJob.qaOnly&&e("div",{style:{background:C.amberBg,border:`1px solid ${C.amberBorder}`,borderRadius:10,padding:"10px 14px",marginBottom:12,fontSize:12,color:C.amber,lineHeight:1.55}},
@@ -1287,9 +1511,9 @@ function ReviewEditor({selectedJob,updateJob,unclaimJob,onDone,onReleased,isComp
         e("button",{onClick:()=>setMode("sentences"),style:{...st.btn,background:mode==="sentences"?C.lilac:"rgba(255,255,255,0.55)",border:`1px solid ${mode==="sentences"?"rgba(109,79,216,0.28)":C.border}`,color:mode==="sentences"?C.accent:C.muted,fontSize:12,padding:"6px 10px"}},"Sentence-by-sentence")
       ),
       mode==="sentences"&&e("div",{style:{display:"flex",gap:8,alignItems:"center",marginLeft:isCompact?0:"auto"}},
-        e("span",{style:{fontSize:12,color:C.muted}},"Herhalen:"),
-        e("button",{type:"button",onMouseDown:()=>choosePropagateMode("auto"),onClick:()=>choosePropagateMode("auto"),style:{...st.btn,fontSize:12,padding:"6px 10px",background:propagateMode==="auto"?C.lilac:"rgba(255,255,255,0.55)",border:`1px solid ${propagateMode==="auto"?"rgba(109,79,216,0.28)":C.border}`,color:propagateMode==="auto"?C.accent:C.muted}},"Automatisch"),
-        e("button",{type:"button",onMouseDown:()=>choosePropagateMode("confirm"),onClick:()=>choosePropagateMode("confirm"),style:{...st.btn,fontSize:12,padding:"6px 10px",background:propagateMode==="confirm"?C.lilac:"rgba(255,255,255,0.55)",border:`1px solid ${propagateMode==="confirm"?"rgba(109,79,216,0.28)":C.border}`,color:propagateMode==="confirm"?C.accent:C.muted}},"Met bevestiging")
+        e("span",{style:{fontSize:12,color:C.muted}},"Repeat:"),
+        e("button",{type:"button",onMouseDown:()=>choosePropagateMode("auto"),onClick:()=>choosePropagateMode("auto"),style:{...st.btn,fontSize:12,padding:"6px 10px",background:propagateMode==="auto"?C.lilac:"rgba(255,255,255,0.55)",border:`1px solid ${propagateMode==="auto"?"rgba(109,79,216,0.28)":C.border}`,color:propagateMode==="auto"?C.accent:C.muted}},"Automatic"),
+        e("button",{type:"button",onMouseDown:()=>choosePropagateMode("confirm"),onClick:()=>choosePropagateMode("confirm"),style:{...st.btn,fontSize:12,padding:"6px 10px",background:propagateMode==="confirm"?C.lilac:"rgba(255,255,255,0.55)",border:`1px solid ${propagateMode==="confirm"?"rgba(109,79,216,0.28)":C.border}`,color:propagateMode==="confirm"?C.accent:C.muted}},"Confirm each")
       )
     ),
     mode==="sentences"&&e("div",{style:{fontSize:12,color:C.muted,margin:"0 0 10px",lineHeight:1.5}},
@@ -1358,7 +1582,7 @@ function ReviewEditor({selectedJob,updateJob,unclaimJob,onDone,onReleased,isComp
       :mode==="full"
       ?e("div",{style:{display:"grid",gridTemplateColumns:(isWide && jobHasEnglishSource(selectedJob))?"1fr 1fr":"1fr",gap:14,alignItems:"stretch",marginBottom:14}},
         jobHasEnglishSource(selectedJob)&&e("div",{style:{...st.card,marginBottom:0,display:"flex",flexDirection:"column",background:"#ffffff"}},
-          e("div",{style:{fontSize:12,fontWeight:700,color:C.muted,marginBottom:8}},"Original — English"),
+          e("div",{style:{fontSize:12,fontWeight:700,color:C.muted,marginBottom:8}},"Source — "+sourceName(selectedJob)),
           e("div",{style:{fontSize:14,color:C.text,lineHeight:1.75,whiteSpace:"pre-wrap",overflow:"auto",flex:1,maxHeight:paneHeight,paddingRight:6}},selectedJob.originalText)
         ),
         e("div",{style:{...st.card,marginBottom:0,display:"flex",flexDirection:"column",background:"#ffffff"}},
@@ -1373,6 +1597,7 @@ function ReviewEditor({selectedJob,updateJob,unclaimJob,onDone,onReleased,isComp
           const aiSentence = aiSentences[idx] || "";
           const sentenceChanged = !!(customerSentence && aiSentence && customerSentence.trim() !== aiSentence.trim());
           const partChecked = sentenceStatus[idx] === "checked";
+          const needsCheck = !!(sendGate && !partChecked);
           const fromId = sentenceMeta[idx] && sentenceMeta[idx].propagatedFrom;
           const fromNumber = fromId ? (Number(String(fromId).replace(/^s/, "")) + 1) : 0;
           const reviewHere = !!(propagateBar && (propagateBar.phase === "review" || propagateBar.phase === "browse") && propagateBar.cursor === idx);
@@ -1395,20 +1620,21 @@ function ReviewEditor({selectedJob,updateJob,unclaimJob,onDone,onReleased,isComp
           const sentenceText = {fontFamily:"inherit",fontSize:15,fontWeight:400,lineHeight:1.5,color:C.text};
           const sourceTag = jobHasEnglishSource(selectedJob) ? shortLang(sourceName(selectedJob)) : shortLang(selectedJob.language);
           const targetTag = shortLang(selectedJob.language);
-          return e("div",{key:idx,onKeyDown:(ev)=>onSentenceKeyDown(ev,idx),style:{display:"grid",gridTemplateColumns:sentenceColumns?"36px minmax(0,1fr) auto":"36px minmax(0,1fr)",gridTemplateAreas:sentenceColumns?'"num body status"':'"num status" "body body"',columnGap:16,rowGap:8,alignItems:"start",marginTop:10,padding:"12px 14px",borderRadius:12,background:partChecked?"#e7f6ee":"#ffffff",border:partChecked?"1px solid #1f7a4d":`1px solid ${C.border}`,borderLeft:partChecked?"6px solid #1f7a4d":undefined,minWidth:0}},
+          return e("div",{key:idx,onKeyDown:(ev)=>onSentenceKeyDown(ev,idx),style:{display:"grid",gridTemplateColumns:sentenceColumns?"36px minmax(0,1fr) auto":"36px minmax(0,1fr)",gridTemplateAreas:sentenceColumns?'"num body status"':'"num status" "body body"',columnGap:16,rowGap:8,alignItems:"start",marginTop:10,padding:"12px 14px",borderRadius:12,background:partChecked?"#e7f6ee":(needsCheck?C.amberBg:"#ffffff"),border:partChecked?"1px solid #1f7a4d":(needsCheck?"1px solid "+C.amber:`1px solid ${C.border}`),borderLeft:partChecked?"6px solid #1f7a4d":(needsCheck?"6px solid "+C.amber:undefined),minWidth:0}},
             e("div",{title:"Segment "+(idx+1),style:{gridArea:"num",width:36,height:28,borderRadius:999,display:"flex",alignItems:"center",justifyContent:"center",fontSize:12,fontWeight:700,background:partChecked?"#ffffff":C.lilac,color:partChecked?"#1f7a4d":C.accent}},String(idx+1)),
             e("div",{style:{gridArea:"status",display:"flex",alignItems:"center",gap:8,justifySelf:"end"}},
-              fromId&&e("span",{title:"Overgenomen van segment "+fromNumber,style:{fontSize:14,color:C.accent,cursor:"default"}},"↩"),
+              fromId&&e("span",{title:"Copied from segment "+fromNumber,style:{fontSize:14,color:C.accent,cursor:"default"}},"↩"),
+              needsCheck&&e("span",{style:{fontSize:11,fontWeight:700,color:C.amber,whiteSpace:"nowrap"}},"Not checked yet"),
               e("button",{type:"button",onClick:()=>togglePartStatus(idx),style:{...st.btn,fontSize:12,fontWeight:700,padding:"6px 12px",background:partChecked?"#1f7a4d":"#ffffff",border:partChecked?"1px solid #1f7a4d":`1px solid ${C.border}`,color:partChecked?"#ffffff":C.muted}},partChecked?"✓ Checked":"Not checked")
             ),
             e("div",{style:{gridArea:"body",minWidth:0}},
               e("div",{style:{display:"grid",gridTemplateColumns:pairColumns?"minmax(0,1fr) minmax(0,1fr)":"minmax(0,1fr)",gap:pairColumns?24:8,alignItems:"start",minWidth:0}},
                 jobHasEnglishSource(selectedJob)&&e("div",{style:{minWidth:0}},
-                  e("div",{style:columnLabel},sourceTag ? "Bron · "+sourceTag : "Bron"),
+                  e("div",{style:columnLabel},sourceTag ? "Source · "+sourceTag : "Source"),
                   e("div",{style:{...sentenceText,padding:"8px 12px",whiteSpace:"pre-wrap",overflowWrap:"anywhere",wordBreak:"break-word"}},origSentence)
                 ),
                 e("div",{style:{minWidth:0}},
-                  e("div",{style:columnLabel},targetTag ? "Doel · "+targetTag : "Doel"),
+                  e("div",{style:columnLabel},targetTag ? "Target · "+targetTag : "Target"),
                   sentenceChanged&&e("div",{style:{...sentenceText,whiteSpace:"pre-wrap",overflowWrap:"anywhere",padding:"8px 12px",marginBottom:8}},
                     trackChangeNodes(e, customerCorrectionParts(customerSentence, aiSentence))
                   ),
@@ -1427,7 +1653,7 @@ function ReviewEditor({selectedJob,updateJob,unclaimJob,onDone,onReleased,isComp
                     ? ("Wijziging "+(propagateBar.order.indexOf(idx)+1)+"/"+propagateBar.order.length)
                     : propagateBar.phase === "review"
                       ? ("Occurrence "+(propagateBar.order.indexOf(idx)+1)+"/"+propagateBar.order.length+" · Segment "+(idx+1))
-                      : ("Deze tekst komt nog "+propagateBar.total+" keer voor ("+propagateBar.checked+" checked, "+propagateBar.unchecked+" unchecked)")
+                      : ("This text appears "+propagateBar.total+" more time"+(propagateBar.total===1?"":"s")+" ("+propagateBar.checked+" checked, "+propagateBar.unchecked+" not checked)")
                 ),
                 e("div",{style:{display:"flex",flexWrap:"wrap",gap:8,alignItems:"center"}},
                   propagateBar.phase === "browse"
@@ -1460,6 +1686,11 @@ function ReviewEditor({selectedJob,updateJob,unclaimJob,onDone,onReleased,isComp
       ),
     e("div",{style:{background:C.soft,border:`1px solid ${C.border}`,borderRadius:10,padding:"11px 14px",marginBottom:14,fontSize:12,color:C.muted}},"Save a draft anytime. Send to client when the review is finished — or release the job back to the queue."),
     savedNote&&e("div",{style:{fontSize:12,color:C.green,marginBottom:10}},savedNote),
+    uncheckedLeft>0&&e("div",{style:{fontSize:13,color:C.amber,background:C.amberBg,border:`1px solid ${C.amberBorder}`,borderRadius:10,padding:"10px 14px",marginBottom:10}},
+      uncheckedLeft===1
+        ?"1 segment still needs to be checked before sending to the client."
+        :(uncheckedLeft+" segments still need to be checked before sending to the client.")
+    ),
     e("div",{style:{display:"grid",gridTemplateColumns:isCompact?"1fr":"1fr 1fr auto",gap:10}},
       e("button",{onClick:handleSaveDraft,disabled:saving||sending||releasing,style:{...st.btn,padding:14,background:"transparent",border:`1px solid ${C.border}`,color:C.muted,fontSize:14}},
         saving?"Saving…":"Save draft"
@@ -1471,12 +1702,29 @@ function ReviewEditor({selectedJob,updateJob,unclaimJob,onDone,onReleased,isComp
         releasing?"Releasing…":"Release job"
       )
     ),
+    preview&&e("div",{style:{position:"fixed",inset:0,zIndex:80,background:"rgba(42,36,56,0.45)",display:"flex",alignItems:"center",justifyContent:"center",padding:16},onClick:function(){setPreview(null);}},
+      e("div",{role:"dialog","aria-modal":"true","aria-label":"File preview",onClick:function(ev){ev.stopPropagation();},style:{background:"#ffffff",borderRadius:16,width:"min(960px,100%)",maxHeight:"88vh",display:"flex",flexDirection:"column",boxShadow:"0 20px 60px rgba(42,36,56,0.18)"}},
+        e("div",{style:{display:"flex",alignItems:"center",justifyContent:"space-between",gap:10,padding:"12px 14px",borderBottom:`1px solid ${C.border}`}},
+          e("div",{style:{fontSize:14,fontWeight:700,color:C.text}},"File preview"),
+          e("div",{style:{display:"flex",gap:8}},
+            preview.phase==="ready"&&e("button",{type:"button",onClick:openPreviewTab,style:{...st.btn,fontSize:12,padding:"6px 10px",background:"transparent",border:`1px solid ${C.border}`,color:C.muted}},"Open in new tab"),
+            e("button",{type:"button",onClick:function(){setPreview(null);},style:{...st.btn,fontSize:12,padding:"6px 10px",background:C.lilac,color:C.accent}},"Close")
+          )
+        ),
+        e("div",{style:{overflow:"auto",padding:16,minHeight:120}},
+          preview.phase==="loading"&&e("div",{style:{fontSize:14,color:C.muted}},"Preparing preview…"),
+          preview.phase==="error"&&e("div",{style:{fontSize:14,color:"#c43d3d",lineHeight:1.5}},preview.message),
+          preview.phase==="ready"&&preview.kind==="text"&&e("pre",{style:{margin:0,whiteSpace:"pre-wrap",fontFamily:"inherit",fontSize:14,lineHeight:1.6,color:C.text}},preview.text),
+          preview.phase==="ready"&&preview.kind!=="text"&&e("div",{ref:previewBoxRef})
+        )
+      )
+    ),
     propagateToast&&e("div",{style:{position:"fixed",left:"50%",bottom:24,transform:"translateX(-50%)",zIndex:40,display:"flex",alignItems:"center",gap:12,background:C.text,color:C.white,borderRadius:10,padding:"10px 14px",fontSize:13,boxShadow:"0 8px 24px rgba(0,0,0,0.18)"}},
       e("span",null,propagateToast.kind==="round"
         ? ((propagateToast.applied||0)+" toegepast, "+(propagateToast.skipped||0)+" overgeslagen")
         : (propagateToast.count===1?"1 segment bijgewerkt":propagateToast.count+" segmenten bijgewerkt")),
-      propagateToast.appliedIndexes&&propagateToast.appliedIndexes.length&&e("button",{type:"button",onClick:browsePropagatedChanges,style:{...st.btn,fontSize:12,padding:"5px 10px",background:"transparent",color:C.white,border:"1px solid rgba(255,255,255,0.35)"}},"Bekijk wijzigingen"),
-      ((propagateToast.revisionIds&&propagateToast.revisionIds.length)||propagateToast.revisionId)&&e("button",{type:"button",onClick:undoPropagate,style:{...st.btn,fontSize:12,padding:"5px 10px",background:"transparent",color:C.white,border:"1px solid rgba(255,255,255,0.35)"}},"Ongedaan maken"),
+      propagateToast.appliedIndexes&&propagateToast.appliedIndexes.length&&e("button",{type:"button",onClick:browsePropagatedChanges,style:{...st.btn,fontSize:12,padding:"5px 10px",background:"transparent",color:C.white,border:"1px solid rgba(255,255,255,0.35)"}},"View changes"),
+      ((propagateToast.revisionIds&&propagateToast.revisionIds.length)||propagateToast.revisionId)&&e("button",{type:"button",onClick:undoPropagate,style:{...st.btn,fontSize:12,padding:"5px 10px",background:"transparent",color:C.white,border:"1px solid rgba(255,255,255,0.35)"}},"Undo"),
       e("button",{type:"button",title:"Sluiten",onClick:()=>setPropagateToast(null),style:{...st.btn,fontSize:16,lineHeight:1,padding:"2px 6px",background:"transparent",color:C.white,border:"none"}},"×")
     )
   );
@@ -1574,7 +1822,7 @@ function MyAssignmentsTab({me,allJobs,updateJob,unclaimJob,focusJobId,setFocusJo
         )
       ),
       filtered.length===0
-        ?e("div",{style:{...st.card,padding:24,textAlign:"center",color:C.muted,fontSize:13}},listFilter==="active"?"No active jobs.":"No jobs in this filter.")
+        ?e("div",{style:{...st.card,padding:24,textAlign:"center",color:C.muted,fontSize:13}},listFilter==="active"?"No active jobs.":"Nothing in this list.")
         :filtered.map(listItem)
     ),
     selectedJob&&!showList&&e("div",{style:{marginBottom:8}},
@@ -1664,7 +1912,7 @@ function FinanceTab({me,allJobs,isCompact,payoutRate}){
 
   return e("div",null,
     e("span",{style:st.label},"Finance overview"),
-    e("div",{style:{fontSize:12,color:C.muted,marginBottom:14}},"Earnings are calculated at ", e("strong",{style:{color:C.pale}}, rateLabel), " of completed translations (from stored job payout when available)."),
+    e("div",{style:{fontSize:12,color:C.muted,marginBottom:14}},"Earnings are calculated at ", e("strong",{style:{color:C.pale}}, rateLabel), " on completed jobs."),
     e("div",{style:{display:"grid",gridTemplateColumns:"repeat(auto-fit, minmax(200px, 1fr))",gap:14,marginBottom:20}},
       statCard("This month", fmtEur(thisMonth.cents), thisMonth.words+" words · "+(thisMonth.items?.length||0)+" jobs"),
       statCard("All time", fmtEur(totalCents), totalWords+" words · "+items.length+" jobs"),
@@ -1695,12 +1943,71 @@ function FinanceTab({me,allJobs,isCompact,payoutRate}){
   );
 }
 
-function RevisorView({me,allJobs,tab,setTab,updateJob,claimJob,unclaimJob,focusJobId,setFocusJobId,payoutRate,onLogout}){
+function AccountTab({me,setMe,offerLanguages,isCompact}){
+  const e=React.createElement;
+  const [name,setName]=useState(me.displayName||"");
+  const [phone,setPhone]=useState(me.phone||"");
+  const [langs,setLangs]=useState(Array.isArray(me.languages)?me.languages.slice():[]);
+  const [msg,setMsg]=useState("");
+  const [err,setErr]=useState("");
+  const [busy,setBusy]=useState(false);
+  const choices=offerLanguages.length?offerLanguages:(Array.isArray(me.languages)?me.languages:[]);
+  function toggle(lang){
+    setLangs(prev=>prev.includes(lang)?prev.filter(item=>item!==lang):choices.filter(item=>prev.includes(item)||item===lang));
+    setMsg("");
+  }
+  async function save(){
+    setErr("");
+    setMsg("");
+    setBusy(true);
+    try{
+      const data=await apiFetch("/api/revisor/account",{method:"POST",body:JSON.stringify({displayName:name,phone,languages:langs})});
+      const next=data && data.revisor ? data.revisor : {};
+      setMe(prev=>Object.assign({}, prev, {
+        displayName: next.displayName||name,
+        phone: next.phone||phone,
+        languages: Array.isArray(next.languages)?next.languages:langs,
+        email: next.email||prev.email
+      }));
+      setMsg("Saved");
+    }catch(ex){
+      setErr(ex.message||"Could not save account");
+    }finally{
+      setBusy(false);
+    }
+  }
+  const field={width:"100%",background:"rgba(255,255,255,0.75)",border:`1px solid ${C.border}`,borderRadius:14,padding:"12px 14px",fontFamily:"inherit",fontSize:14,fontWeight:600,color:C.text,outline:"none"};
+  return e("div",{style:{maxWidth:560}},
+    e("div",{style:{...st.card,padding:isCompact?18:24}},
+      e("div",{className:"lc-display",style:{fontSize:28,color:C.text,marginBottom:6}},"My account"),
+      e("div",{style:{fontSize:13,color:C.muted,lineHeight:1.6,marginBottom:18}},"These are the details on your account."),
+      e("label",{style:st.label},"Display name"),
+      e("input",{value:name,onChange:ev=>{setName(ev.target.value);setMsg("");},style:{...field,marginBottom:14}}),
+      e("div",{style:st.label},"Email address"),
+      e("div",{style:{fontSize:15,fontWeight:600,color:C.text,marginBottom:4}},me.email||me.username||""),
+      e("div",{style:{fontSize:12,color:C.muted,lineHeight:1.5,marginBottom:14}},"This is the address you use to sign in."),
+      e("label",{style:st.label},"Phone number"),
+      e("input",{type:"tel",value:phone,onChange:ev=>{setPhone(ev.target.value);setMsg("");},placeholder:"+31 6 12345678",style:{...field,marginBottom:14}}),
+      e("div",{style:st.label},"Languages you can translate"),
+      e("div",{style:{display:"flex",flexDirection:"column",gap:8,maxHeight:320,overflow:"auto",marginBottom:16}},
+        choices.map(lang=>{
+          const on=langs.includes(lang);
+          return e("button",{key:lang,type:"button",onClick:()=>toggle(lang),style:{...st.btn,width:"100%",textAlign:"left",padding:"12px 14px",fontSize:14,background:on?C.lilac:"rgba(255,255,255,0.75)",border:`1px solid ${on?"rgba(109,79,216,0.28)":C.border}`,color:on?C.accent:C.text}},on?"✓ "+lang:lang);
+        })
+      ),
+      err&&e("div",{style:{fontSize:13,color:"#c43d3d",marginBottom:10}},err),
+      msg&&e("div",{style:{fontSize:13,color:C.green,marginBottom:10}},msg),
+      e("button",{className:"primary",type:"button",onClick:save,disabled:busy,style:{...st.btn,padding:"14px 18px",background:C.accent,color:C.white,fontSize:15}},busy?"Saving…":"Save")
+    )
+  );
+}
+
+function RevisorView({me,setMe,allJobs,tab,setTab,updateJob,claimJob,unclaimJob,focusJobId,setFocusJobId,payoutRate,offerLanguages,onLogout}){
   const e=React.createElement;
   const isCompact=!useMedia("(min-width: 768px)");
 
   const counts = {
-    queue: allJobs.filter(isQueuedJob).length,
+    queue: allJobs.filter(j=>isQueuedJob(j) && jobInOfferedLanguages(j, me)).length,
     mine: allJobs.filter(j=>(j.claimedByRevisorId===me.revisorId || j.completedByRevisorId===me.revisorId) && j.status!=="complete").length
   };
 
@@ -1709,12 +2016,14 @@ function RevisorView({me,allJobs,tab,setTab,updateJob,claimJob,unclaimJob,focusJ
     e("div",{style:{animation:"rise 0.45s var(--ease)"}},
       tab==="queue" && e(QueueTab,{me,allJobs,claimJob,setTab,setFocusJobId,isCompact,payoutRate}),
       tab==="mine" && e(MyAssignmentsTab,{me,allJobs,updateJob,unclaimJob,focusJobId,setFocusJobId,isCompact,payoutRate}),
-      tab==="finance" && e(FinanceTab,{me,allJobs,isCompact,payoutRate})
+      tab==="finance" && e(FinanceTab,{me,allJobs,isCompact,payoutRate}),
+      tab==="account" && e(AccountTab,{me,setMe,offerLanguages,isCompact})
     )
   );
 }
 
 ReactDOM.createRoot(document.getElementById("root")).render(React.createElement(RevisorApp));
 </script>
+<script src="privacy-modal.js"></script>
 </body>
 </html>

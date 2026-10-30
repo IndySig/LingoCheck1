@@ -1,0 +1,103 @@
+<!DOCTYPE html>
+<html lang="nl">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>LingoCheck — Privacy</title>
+<link href="https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;600;700&display=swap" rel="stylesheet">
+<style>
+  :root{--bg:#efe8dc;--ink:#2a2438;--muted:#6a6178;--accent:#6d4fd8;--card:#fffdf8;--border:rgba(42,36,56,0.10);}
+  *{box-sizing:border-box;}
+  body{margin:0;background:var(--bg);color:var(--ink);font-family:Manrope,system-ui,sans-serif;line-height:1.65;}
+  main{max-width:760px;margin:0 auto;padding:36px 20px 72px;}
+  a{color:var(--accent);}
+  h1{font-size:32px;letter-spacing:-0.03em;margin:12px 0 8px;}
+  h2{font-size:18px;margin:28px 0 8px;}
+  p,li{font-size:15px;}
+  .card{background:var(--card);border:1px solid var(--border);border-radius:18px;padding:22px 22px 8px;margin-top:18px;}
+  .note{font-size:13px;color:var(--muted);}
+  ul{padding-left:18px;}
+</style>
+</head>
+<body>
+<main>
+  <a href="/">LingoCheck</a>
+  <div id="privacy-text">
+  <h1>Privacyverklaring</h1>
+  <p class="note">Deze tekst beschrijft hoe deze LingoCheck-dienst werkt. Vul bovenaan je wettelijke naam, adres en contactmail in voordat je de dienst openbaar aanbiedt. Dit is geen juridisch advies.</p>
+
+  <div class="card">
+    <h2>Wie is verantwoordelijk</h2>
+    <p>Verwerkingsverantwoordelijke voor het klantmailadres, de revisoraccounts en het draaien van de dienst is de exploitant van deze LingoCheck-installatie. Zet hier je bedrijfsnaam, postadres en een privacy-mailadres.</p>
+    <p>Voor de tekst in een opdracht ben je als opdrachtgever meestal zelf verantwoordelijk. LingoCheck verwerkt die tekst om de vertaling te maken of te controleren en door een revisor te laten nakijken. Daar hoort een verwerkersafspraak bij als je dit voor klanten doet.</p>
+
+    <h2>Welke gegevens</h2>
+    <ul>
+      <li>Het e-mailadres waarop de aflevering wordt gestuurd, bewaard bij de opdracht.</li>
+      <li>De brontekst, de vertaling, de revisie, de bestandsnaam en bij Word- of PDF-bestanden het bestand zelf.</li>
+      <li>Een anonieme code in de browser, het laatst gebruikte mailadres en het nummer van de open opdracht, lokaal op jouw apparaat.</li>
+      <li>Van een revisor: naam, e-mailadres, een gehasht wachtwoord, en tijdelijke inlog- of resetcodes. Het wachtwoord zelf wordt niet bewaard.</li>
+    </ul>
+
+    <h2>Waarom</h2>
+    <p>Het mailadres en de tekst zijn nodig om de opdracht uit te voeren. Dat is de overeenkomst (artikel 6 lid 1 b AVG). Revisoraccounts zijn nodig om het werk te laten doen. Beveiligingscontroles, zoals een botcheck, zijn een gerechtvaardigd belang om misbruik te beperken.</p>
+    <p>We sturen geen marketingmail.</p>
+
+    <h2>Met wie</h2>
+    <ul>
+      <li>De revisor die de opdracht claimt, ziet de tekst en werkt erin.</li>
+      <li>De vertaling gaat naar Anthropic (Claude) om een concept te maken. Dat kan verwerking buiten de EU zijn. Sluit hun verwerkersvoorwaarden af.</li>
+      <li>Het aflevermailtje gaat via de mailserver die jij instelt.</li>
+      <li>De opdracht staat op de server die LingoCheck draait. In het projectbestand staat Frankfurt als regio; controleer dat in je hostingdashboard.</li>
+      <li>De pagina laadt lettertypen bij Google en bibliotheken bij cdnjs. Daarbij ziet die partij het IP-adres van de bezoeker. Een botcheck, als die aanstaat, loopt via Cloudflare.</li>
+    </ul>
+
+    <h2>Hoe lang</h2>
+    <p>De software verwijdert opdrachten niet vanzelf. Ze blijven staan tot de exploitant ze wist of jij om verwijdering vraagt. Bewaar ze niet langer dan nodig is voor aflevering, een vraag achteraf en je administratie.</p>
+
+    <h2>Jouw rechten</h2>
+    <p>Je kunt inzage, correctie, verwijdering, beperking, overdracht of bezwaar vragen bij de exploitant. Er is nog geen selfservice-knop voor verwijderen of exporteren. Je kunt ook een klacht indienen bij de Autoriteit Persoonsgegevens.</p>
+
+    <h2>Cookies en lokale opslag</h2>
+    <p>De inlogcookie van een revisor en de tijdelijke tweestapscookie zijn strikt nodig voor de sessie. Daar vragen we geen aparte toestemming voor. Er zijn geen advertentiecookies. De klantpagina bewaart in de browser een anonieme code, je mailadres voor de volgende keer, en welke opdracht openstaat.</p>
+
+    <h2>Gegevens van andere mensen</h2>
+    <p>Staat er in het bestand iets over iemand anders, dan mag je dat alleen uploaden als je daar een grond voor hebt. Vink dat aan voordat je de opdracht verstuurt.</p>
+  </div>
+
+  <h1 style="margin-top:48px">Privacy notice</h1>
+  <p class="note">This describes this LingoCheck service. Add your legal name, postal address, and a privacy contact before offering it publicly. This is not legal advice.</p>
+  <div class="card">
+    <h2>Who is responsible</h2>
+    <p>The operator of this LingoCheck installation is the controller for the delivery email, revisor accounts, and running the service. Put the legal name, postal address, and privacy email here.</p>
+    <p>You usually remain responsible for the personal data inside a file you upload. LingoCheck processes that text to produce or check the translation and to have a revisor read it. Use a data-processing agreement when you offer this to your own clients.</p>
+    <h2>What we keep</h2>
+    <ul>
+      <li>The email address used to deliver the file, stored with the job.</li>
+      <li>The source, the translation, the revision, the file name, and, for Word or PDF, the file itself.</li>
+      <li>On your device: an anonymous id, the email you last typed, and which job is open.</li>
+      <li>For a revisor: name, email, a hashed password, and short-lived login or reset codes. The password itself is not stored.</li>
+    </ul>
+    <h2>Why</h2>
+    <p>The email and the text are needed to perform the job (contract, GDPR article 6(1)(b)). Revisor accounts exist so a person can do the review. Bot checks, when enabled, are a legitimate interest in limiting abuse. We do not send marketing email.</p>
+    <h2>Who else sees it</h2>
+    <ul>
+      <li>The revisor who claims the job sees the text.</li>
+      <li>Draft translation is sent to Anthropic (Claude). That can mean processing outside the EU. Sign their data-processing terms.</li>
+      <li>The delivery email is sent through the mail server you configure.</li>
+      <li>Jobs are stored on the server that runs LingoCheck. The project file names Frankfurt; confirm the region in your host’s dashboard.</li>
+      <li>The page loads fonts from Google and libraries from cdnjs, so those parties see the visitor’s IP address. An optional bot check uses Cloudflare.</li>
+    </ul>
+    <h2>How long</h2>
+    <p>Jobs are not deleted automatically. They stay until the operator deletes them or you ask for deletion. Keep them only as long as delivery, a follow-up question, and your bookkeeping require.</p>
+    <h2>Your rights</h2>
+    <p>You can ask the operator for access, correction, deletion, restriction, portability, or to object. There is no self-service export or delete button yet. You can also complain to the Dutch data protection authority (Autoriteit Persoonsgegevens).</p>
+    <h2>Cookies and local storage</h2>
+    <p>The revisor session cookie and the short-lived two-step cookie are strictly necessary. There is no advertising cookie and no cookie banner for those. The client page stores an anonymous id, your email for next time, and the open job id in the browser.</p>
+    <h2>Other people’s data</h2>
+    <p>If the file mentions someone else, upload it only when you are allowed to share it for this job. Confirm that before you send the job.</p>
+  </div>
+  </div>
+</main>
+</body>
+</html>
