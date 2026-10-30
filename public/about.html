@@ -1,0 +1,183 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>About Us | LingoCheck</title>
+<meta name="description" content="LingoCheck checks your AI translations with professional human revisors: fast, affordable and reliable.">
+<link href="https://fonts.googleapis.com/css2?family=Kufam:ital,wght@0,400;0,500;0,600;0,700;1,400&family=Manrope:wght@400;500;600;700&display=swap" rel="stylesheet">
+<style>
+  :root{
+    --bg:#efe8dc;
+    --ink:#2a2438;
+    --muted:#6a6178;
+    --accent:#6d4fd8;
+    --lilac:#d9d0f5;
+    --border:rgba(42,36,56,0.10);
+    --ease:cubic-bezier(0.22, 1, 0.36, 1);
+  }
+  *{margin:0;padding:0;box-sizing:border-box;}
+  body{
+    background:var(--bg);
+    color:var(--ink);
+    font-family:'Manrope',system-ui,sans-serif;
+    font-weight:400;
+    min-height:100vh;
+    line-height:1.7;
+    -webkit-font-smoothing:antialiased;
+    overflow-x:hidden;
+  }
+  body::before,body::after{
+    content:"";
+    position:fixed;
+    pointer-events:none;
+    z-index:0;
+    border-radius:50%;
+    filter:blur(60px);
+  }
+  body::before{
+    width:min(70vw,640px);
+    height:min(70vw,640px);
+    top:-12%;
+    left:-8%;
+    background:rgba(109,79,216,0.16);
+  }
+  body::after{
+    width:min(55vw,520px);
+    height:min(55vw,520px);
+    right:-10%;
+    top:18%;
+    background:rgba(217,208,245,0.55);
+  }
+  a,button{transition:transform .2s var(--ease), background .2s var(--ease), border-color .2s var(--ease), color .2s var(--ease), opacity .2s var(--ease), box-shadow .2s var(--ease);}
+  a:hover{opacity:0.94;}
+  .page{position:relative;z-index:1;}
+  .lc-nav-pill{
+    background:rgba(255,255,255,0.55);
+    backdrop-filter:blur(18px) saturate(1.4);
+    -webkit-backdrop-filter:blur(18px) saturate(1.4);
+    border:1px solid rgba(255,255,255,0.65);
+    box-shadow:0 8px 32px rgba(42,36,56,0.06);
+  }
+  .lc-display{font-family:'Kufam',system-ui,sans-serif;}
+  header{position:sticky;top:0;z-index:40;padding:20px 24px 0;}
+  .nav-pill{
+    max-width:720px;
+    margin:0 auto;
+    padding:10px 14px;
+    border-radius:999px;
+    display:flex;
+    align-items:center;
+    justify-content:space-between;
+    gap:12px;
+    flex-wrap:wrap;
+  }
+  .brand{
+    text-decoration:none;
+    color:var(--ink);
+    font-size:20px;
+    font-weight:600;
+    letter-spacing:-0.02em;
+    padding:4px 6px;
+  }
+  .brand span{color:var(--accent);}
+  .nav-links{display:flex;align-items:center;gap:8px;flex-wrap:wrap;justify-content:flex-end;}
+  .nav-links a{
+    font-size:13px;
+    font-weight:600;
+    color:var(--muted);
+    text-decoration:none;
+    background:rgba(255,255,255,0.7);
+    padding:8px 14px;
+    border-radius:999px;
+    white-space:nowrap;
+    border:1px solid var(--border);
+  }
+  .nav-links a[aria-current="page"]{color:var(--accent);background:var(--lilac);border-color:rgba(109,79,216,0.28);}
+  main{max-width:700px;margin:0 auto;padding:36px 20px 24px;}
+  .hero{margin-bottom:28px;}
+  h1{font-size:clamp(1.85rem, 1.1rem + 2.8vw, 3.25rem);letter-spacing:-0.03em;line-height:1.15;font-weight:600;margin-bottom:12px;}
+  .hero h2{font-size:clamp(1.15rem, 1rem + 0.6vw, 1.45rem);font-weight:600;letter-spacing:-0.02em;line-height:1.35;color:var(--ink);}
+  section{
+    background:rgba(255,255,255,0.72);
+    backdrop-filter:blur(18px) saturate(1.2);
+    -webkit-backdrop-filter:blur(18px) saturate(1.2);
+    border:1px solid rgba(255,255,255,0.8);
+    box-shadow:0 20px 60px rgba(42,36,56,0.08);
+    border-radius:28px;
+    padding:28px;
+    margin-bottom:20px;
+  }
+  section h2{font-size:20px;font-weight:600;letter-spacing:-0.02em;margin-bottom:10px;}
+  section p+p{margin-top:14px;}
+  .cta-wrap{text-align:center;margin:12px 0 28px;}
+  a.primary{
+    display:inline-block;
+    background:var(--accent);
+    color:#ffffff;
+    text-decoration:none;
+    border-radius:999px;
+    font-weight:600;
+    font-size:16px;
+    padding:16px 18px;
+  }
+  a.primary:hover{opacity:1;transform:translateY(-1px);box-shadow:0 12px 28px rgba(109,79,216,0.22);}
+  a.primary:focus-visible{outline:3px solid var(--ink);outline-offset:3px;}
+  footer{text-align:center;margin-top:88px;padding:0 20px 48px;font-size:14px;color:var(--muted);letter-spacing:-0.2px;}
+  footer a{color:var(--accent);text-decoration:none;}
+  footer a:hover{text-decoration:underline;}
+  @media (max-width: 767px){
+    header{padding:14px 16px 0;}
+    .nav-pill{padding:10px 12px;border-radius:24px;}
+    .brand{font-size:18px;}
+    section{padding:22px;border-radius:24px;}
+  }
+</style>
+</head>
+<body>
+<div class="page">
+  <header>
+    <div class="lc-nav-pill nav-pill">
+      <a class="brand lc-display" href="/">Lingo<span>Check</span></a>
+      <nav class="nav-links" aria-label="Main">
+        <a href="/about" aria-current="page">About Us</a>
+        <a href="/revisor">Revisor login</a>
+      </nav>
+    </div>
+  </header>
+  <main>
+    <div class="hero">
+      <h1>About LingoCheck</h1>
+      <h2>Your AI translation, checked by a human expert.</h2>
+    </div>
+    <section>
+      <h2>Why we started</h2>
+      <p>The translation industry is changing fast. More and more organisations use AI to translate their content, and that makes sense: it's quick and cheap. But AI translations still contain mistakes. Sentences go missing, content gets invented, terminology slips, and the result often sounds just slightly off. At the same time, we saw translators and translation agencies losing work, even though their expertise is needed more than ever.</p>
+      <p>We thought there had to be a better way.</p>
+    </section>
+    <section>
+      <h2>What we do</h2>
+      <p>LingoCheck checks your AI translations. You keep using the AI tool you already have. We make sure the result is right before it reaches your readers.</p>
+      <p>Every translation is reviewed by a professional human revisor, not just another algorithm. They check that nothing is missing or added, that the text is correct and natural, and that your terminology is used consistently. Our platform helps revisors work quickly, so you get expert quality without the time or cost of a full traditional revision.</p>
+    </section>
+    <section>
+      <h2>Built with translation experts</h2>
+      <p>We developed LingoCheck together with Interlingo, an experienced translation agency. Their knowledge of what goes wrong in translations, and of how professionals catch it, is built into how LingoCheck works.</p>
+    </section>
+    <section>
+      <h2>For revisors</h2>
+      <p>AI isn't going away, and neither is the need for human judgement. LingoCheck gives professional translators the chance to put their expertise to wider use and take on more work.</p>
+    </section>
+    <section>
+      <h2>Where we're going</h2>
+      <p>Our goal is to become the standard for quality-checking AI translations, so that using AI never means compromising on quality.</p>
+    </section>
+    <div class="cta-wrap">
+      <a class="primary" href="/">Try your first check</a>
+    </div>
+  </main>
+  <footer>Made for careful translations — with a human in the loop. <a href="/about" aria-current="page">About Us</a> · <a href="/privacy">Privacy</a></footer>
+</div>
+<script src="privacy-modal.js"></script>
+</body>
+</html>

@@ -103,6 +103,8 @@
 </head>
 <body>
 <div id="app"></div>
+<script src="privacy-modal.js"></script>
+<footer style="position:relative;z-index:1;text-align:center;padding:8px 16px 28px;font-size:13px;"><a href="/privacy" style="color:#6d4fd8;">Privacy</a></footer>
 <script>
 const C={deep:"#2a2438",mid:"#5b3fc4",accent:"#6d4fd8",light:"#6d4fd8",pale:"#6d4fd8",lilac:"#d9d0f5",surface:"#ffffff",card:"#ffffff",border:"rgba(42,36,56,0.10)",text:"#2a2438",muted:"#6a6178",white:"#ffffff",green:"#1f7a4d",greenBg:"rgba(238,247,241,0.9)",greenBorder:"rgba(31,122,77,0.18)",soft:"rgba(255,255,255,0.55)"};
 const st={
@@ -153,6 +155,7 @@ let otpInfo = null;
 let resetToken = "";
 let notice = "";
 let forgotSent = false;
+let codeNote = "";
 
 function shell(inner){
   return `
@@ -166,6 +169,36 @@ function shell(inner){
   `;
 }
 
+let offerLanguages = [];
+let signupStep = 0;
+let signupDraft = { displayName:"", email:"", phone:"", password:"", languages:[] };
+
+function escapeAttr(value){
+  return String(value||"").replace(/&/g,"&amp;").replace(/"/g,"&quot;").replace(/</g,"&lt;");
+}
+
+function phoneLooksValid(value){
+  const raw = String(value||"").trim();
+  const digits = raw.replace(/\D/g,"");
+  return digits.length>=8 && digits.length<=15 && /^[0-9+().\-\s]{8,24}$/.test(raw);
+}
+
+function chosenLanguages(){
+  return [...document.querySelectorAll('input[name="revisor-lang"]:checked')].map(el=>el.value);
+}
+
+function languagePickerHtml(){
+  const langs = offerLanguages.length ? offerLanguages : [];
+  return `
+    <div style="margin:0 0 14px">
+      <div style="${styleStr(st.label)}">Languages you can translate</div>
+      <div style="font-size:12px;color:${C.muted};line-height:1.5;margin:-2px 0 8px">You only receive jobs in the languages you select.</div>
+      <div style="display:flex;flex-wrap:wrap;gap:8px">
+        ${langs.map(lang=>`<label style="display:inline-flex;align-items:center;gap:6px;font-size:13px;font-weight:600;color:${C.text};background:rgba(255,255,255,0.7);border:1px solid ${C.border};border-radius:999px;padding:6px 10px;cursor:pointer"><input type="checkbox" name="revisor-lang" value="${lang}" style="accent-color:${C.accent}">${lang}</label>`).join("")}
+      </div>
+    </div>
+  `;
+}
 function renderPasswordChecklist(password){
   const checks=passwordChecks(password);
   return `<ul class="pw-list">${PW_RULES.map(rule=>{
@@ -197,6 +230,128 @@ function bindPasswordChecklist(input, confirmInput){
     confirmInput.addEventListener("keyup", update);
   }
   update();
+}
+
+function renderSignup(){
+  const root = qs("#app");
+  const steps = [
+    { title:"Personal information", hint:"Name, email, phone number, and a password for your revisor account." },
+    { title:"What languages do you translate?", hint:"Select every language you can translate into. You only receive jobs in these languages." }
+  ];
+  const step = Math.max(0, Math.min(signupStep, steps.length - 1));
+  signupStep = step;
+  const info = steps[step];
+  const field = step===0
+    ? `<label style="${styleStr(st.label)}" for="dn">Display name</label>
+       <input id="dn" autocomplete="name" value="${escapeAttr(signupDraft.displayName)}" style="${styleStr(st.inp)}" placeholder="e.g. Anna Janssen" />
+       <div style="height:12px"></div>
+       <label style="${styleStr(st.label)}" for="email">Email address</label>
+       <input id="email" type="email" inputmode="email" autocomplete="email" value="${escapeAttr(signupDraft.email)}" style="${styleStr(st.inp)}" placeholder="you@example.com" />
+       <div style="height:12px"></div>
+       <label style="${styleStr(st.label)}" for="phone">Phone number</label>
+       <input id="phone" type="tel" inputmode="tel" autocomplete="tel" value="${escapeAttr(signupDraft.phone)}" style="${styleStr(st.inp)}" placeholder="+31 6 12345678" />
+       <div style="height:12px"></div>
+       <label style="${styleStr(st.label)}" for="p">Password</label>
+       <input id="p" type="password" autocomplete="new-password" value="${escapeAttr(signupDraft.password)}" style="${styleStr(st.inp)}" placeholder="Create a strong password" />
+       ${renderPasswordChecklist(signupDraft.password)}`
+    : `<div style="display:flex;flex-direction:column;gap:8px;max-height:280px;overflow:auto;padding-right:2px">${offerLanguages.map(lang=>{
+        const on = signupDraft.languages.includes(lang);
+        return `<button type="button" data-lang="${escapeAttr(lang)}" style="${styleStr(st.btn)};width:100%;text-align:left;padding:12px 14px;font-size:14px;background:${on?C.lilac:"rgba(255,255,255,0.75)"};border:1px solid ${on?"rgba(109,79,216,0.28)":C.border};color:${on?C.accent:C.text}">${on?"✓ ":""}${escapeAttr(lang)}</button>`;
+      }).join("") || `<div style="font-size:13px;color:${C.muted}">Languages could not be loaded. Refresh the page and try again.</div>`}</div>`;
+  root.innerHTML = shell(`
+    <div style="display:flex;gap:8px;margin-bottom:18px">
+      <button id="tabLogin" style="${styleStr(st.btn)};flex:1;padding:10px;font-size:13px;background:transparent;border:1px solid ${C.border};color:${C.muted}">Log in</button>
+      <button id="tabSignup" style="${styleStr(st.btn)};flex:1;padding:10px;font-size:13px;background:${C.lilac};border:1px solid rgba(109,79,216,0.28);color:${C.accent}">Sign up</button>
+    </div>
+    <div style="font-size:12px;font-weight:600;color:${C.accent};margin-bottom:8px">Step ${step + 1} of ${steps.length}</div>
+    <div class="lc-display" style="font-size:28px;font-weight:400;color:${C.text};letter-spacing:-0.02em;line-height:1.2;margin-bottom:8px">${info.title}</div>
+    <div style="${styleStr(st.muted)};margin-bottom:18px">${info.hint}</div>
+    ${field}
+    <div id="err" style="display:none;margin-top:14px;font-size:12px;color:#c43d3d"></div>
+    <div style="display:flex;gap:8px;margin-top:18px">
+      ${step>0?`<button id="stepBack" type="button" style="${styleStr(st.btn)};padding:15px 16px;background:transparent;border:1px solid ${C.border};color:${C.text}">Back</button>`:""}
+      <button id="stepNext" class="primary" type="button" style="${styleStr(st.btn)};flex:1;padding:15px;background:${C.accent};font-size:15px;color:${C.white}">${step===steps.length-1?"Create account":"Next"}</button>
+    </div>
+  `);
+  qs("#tabLogin").addEventListener("click", ()=>{ mode="login"; render(); });
+  const err = qs("#err");
+  function showError(message){
+    err.textContent = message;
+    err.style.display = "block";
+  }
+  function remember(){
+    if(step!==0) return;
+    const name = qs("#dn");
+    const email = qs("#email");
+    const phone = qs("#phone");
+    const password = qs("#p");
+    if(name) signupDraft.displayName = (name.value || "").trim();
+    if(email) signupDraft.email = (email.value || "").trim();
+    if(phone) signupDraft.phone = (phone.value || "").trim();
+    if(password) signupDraft.password = password.value || "";
+  }
+  function problem(){
+    if(step===0 && signupDraft.displayName.length<2) return "Enter the name you want on your account.";
+    if(step===0 && !isValidEmail(signupDraft.email)) return "Enter a valid email address.";
+    if(step===0 && !phoneLooksValid(signupDraft.phone)) return "Enter a valid phone number.";
+    if(step===0 && !isStrongPassword(signupDraft.password)) return "Password does not meet all requirements yet.";
+    if(step===1 && !signupDraft.languages.length) return "Choose at least one language you can translate.";
+    return "";
+  }
+  document.querySelectorAll("[data-lang]").forEach(btn=>{
+    btn.addEventListener("click", ()=>{
+      const lang = btn.getAttribute("data-lang");
+      const at = signupDraft.languages.indexOf(lang);
+      if(at===-1) signupDraft.languages.push(lang);
+      else signupDraft.languages.splice(at, 1);
+      render();
+    });
+  });
+  const back = qs("#stepBack");
+  if(back) back.addEventListener("click", ()=>{ remember(); signupStep = Math.max(0, step-1); render(); });
+  const password = qs("#p");
+  if(password){
+    password.addEventListener("input", ()=>{
+      signupDraft.password = password.value;
+      document.querySelectorAll(".pw-list li").forEach(li=>{
+        const checks = passwordChecks(password.value);
+        const ok = !!checks[li.dataset.rule];
+        li.classList.toggle("ok", ok);
+        const dot = li.querySelector(".pw-dot");
+        if(dot) dot.textContent = ok ? "✓" : "";
+      });
+    });
+  }
+  qs("#stepNext").addEventListener("click", async ()=>{
+    remember();
+    const message = problem();
+    if(message){ showError(message); return; }
+    if(step<1){ signupStep = step+1; render(); return; }
+    const btn = qs("#stepNext");
+    btn.disabled = true;
+    btn.textContent = "Creating…";
+    try{
+      const data = await apiFetch("/api/auth/signup",{method:"POST",body:JSON.stringify({
+        email: signupDraft.email,
+        displayName: signupDraft.displayName,
+        phone: signupDraft.phone,
+        password: signupDraft.password,
+        languages: signupDraft.languages
+      })});
+      otpInfo = { code:data.code, emailMasked:data.emailMasked, delivered:!!data.delivered };
+      codeNote = "";
+      mode = "2fa-verify";
+      render();
+    }catch(e){
+      showError(e.message);
+      btn.disabled = false;
+      btn.textContent = "Create account";
+    }
+  });
+  ["#dn","#email","#phone","#p"].forEach(sel=>{
+    const el = qs(sel);
+    if(el) el.addEventListener("keydown", ev=>{ if(ev.key==="Enter") qs("#stepNext").click(); });
+  });
 }
 
 function render(){
@@ -269,6 +424,11 @@ function render(){
     return;
   }
 
+  if(mode==="signup"){
+    renderSignup();
+    return;
+  }
+
   const isLogin = mode === "login";
   root.innerHTML = shell(`
         ${notice && isLogin ? `<div style="margin-bottom:14px;font-size:13px;line-height:1.5;color:${C.green};background:${C.greenBg};border:1px solid ${C.greenBorder};border-radius:16px;padding:12px 14px">${notice}</div>` : ""}
@@ -276,7 +436,7 @@ function render(){
           <div class="lc-display" style="font-size:28px;font-weight:400;color:${C.text};letter-spacing:-0.02em;line-height:1.15">${isLogin?"Welcome back":"Join as a revisor"}</div>
         </div>
         <div style="${styleStr(st.muted)};margin-bottom:22px">
-          ${isLogin?"Sign in to pick up jobs and finish careful reviews.":"Create an account to claim translations and get paid for your work."}
+          ${isLogin?"Log in to pick up jobs and finish careful reviews.":"Create an account to claim translations and get paid for your work."}
         </div>
 
         <div style="display:flex;gap:8px;margin-bottom:18px">
@@ -317,6 +477,11 @@ function render(){
   if(forgot) forgot.addEventListener("click", ()=>{ mode="forgot"; notice=""; forgotSent=false; render(); });
   qs("#tabSignup").addEventListener("click", ()=>{ mode="signup"; render(); });
   bindPasswordChecklist(p);
+  if(!isLogin){
+    document.querySelectorAll('input[name="revisor-lang"]').forEach(el=>{
+      el.addEventListener("change", ()=> p.dispatchEvent(new Event("input")));
+    });
+  }
 
   function showError(message){
     err.textContent=message;
@@ -347,6 +512,11 @@ function render(){
       p.focus();
       return;
     }
+    const languages = chosenLanguages();
+    if(!isLogin && !languages.length){
+      showError("Choose at least one language you can translate.");
+      return;
+    }
     btn.disabled=true;
     btn.textContent= isLogin ? "Logging in…" : "Creating…";
     try{
@@ -356,7 +526,7 @@ function render(){
         location.href="/revisor";
         return;
       }
-      const data=await apiFetch("/api/auth/signup",{method:"POST",body:JSON.stringify({email:emailValue,displayName:(dn?.value||"").trim(),password})});
+      const data=await apiFetch("/api/auth/signup",{method:"POST",body:JSON.stringify({email:emailValue,displayName:(dn?.value||"").trim(),password,languages})});
       otpInfo={code:data.code, emailMasked:data.emailMasked, delivered:!!data.delivered};
       codeNote="";
       render();
@@ -400,7 +570,6 @@ function bindVerify(){
   async function sendNew(){
     err.style.display="none";
     resend.disabled=true;
-    try{
     resend.textContent="Sending…";
     try{
       const data=await apiFetch("/api/auth/2fa/resend",{method:"POST",body:"{}"});
@@ -410,6 +579,7 @@ function bindVerify(){
     }catch(e){
       showError(e.message);
       resend.disabled=false;
+      resend.textContent="Send a new code";
     }
   }
   btn.addEventListener("click",submit);
@@ -474,7 +644,7 @@ function bindReset(){
     try{
       await apiFetch("/api/auth/reset-password",{method:"POST",body:JSON.stringify({token:resetToken,password:p.value})});
       resetToken="";
-      notice="Password updated. Sign in with your new password.";
+      notice="Password updated. Log in with your new password.";
       mode="login";
       history.replaceState({}, "", "/login");
       render();
@@ -496,6 +666,10 @@ async function boot(){
     render();
     return;
   }
+  try{
+    const cfg=await apiFetch("/api/public-config",{method:"GET"});
+    if(Array.isArray(cfg.languages)) offerLanguages=cfg.languages.filter(Boolean);
+  }catch{}
   try{
     const me=await apiFetch("/api/auth/me",{method:"GET"});
     if(me.authenticated){ location.href="/revisor"; return; }

@@ -5,7 +5,11 @@ const os = require('os');
 const path = require('path');
 const { spawnSync } = require('child_process');
 
-const ALLOWED_LANGUAGES = Object.freeze(['English', 'Dutch', 'Spanish', 'German']);
+const ALLOWED_LANGUAGES = Object.freeze([
+  'English', 'Dutch', 'Spanish', 'German',
+  'French', 'Italian', 'Portuguese',
+  'Arabic', 'Chinese', 'Hindi', 'Indonesian', 'Japanese', 'Korean'
+]);
 const MAX_TEXT_CHARS = 25000;
 const MAX_CLIENT_ID_LEN = 64;
 const MAX_FILENAME_LEN = 180;
@@ -185,9 +189,33 @@ function sanitizeClientId(value) {
   return id;
 }
 
+function sanitizePhone(value) {
+  const raw = String(value || '').trim().replace(/\s+/g, ' ');
+  if (!/^[0-9+().\-\s]{8,24}$/.test(raw)) return null;
+  const digits = raw.replace(/\D/g, '');
+  if (digits.length < 8 || digits.length > 15) return null;
+  return raw;
+}
+
 function sanitizeLanguage(value) {
   const language = String(value || '').trim();
   return ALLOWED_LANGUAGES.includes(language) ? language : null;
+}
+
+function sanitizeLanguageList(value) {
+  if (!Array.isArray(value)) return [];
+  const out = [];
+  for (const item of value) {
+    const language = sanitizeLanguage(item);
+    if (language && !out.includes(language)) out.push(language);
+  }
+  return out;
+}
+
+function revisorCanSeeQueuedJob(languages, jobLanguage) {
+  const offered = sanitizeLanguageList(languages);
+  if (!offered.length) return true;
+  return offered.includes(jobLanguage);
 }
 
 function sanitizeEmail(value) {
@@ -252,6 +280,19 @@ function sanitizeSentenceList(list) {
 function sanitizeSentenceStatus(list) {
   if (!Array.isArray(list)) return [];
   return list.slice(0, 600).map((item) => (item === 'checked' ? 'checked' : ''));
+}
+
+function uncheckedSendError(statuses, segmentCount) {
+  const count = Number(segmentCount) || 0;
+  if (!count || !Array.isArray(statuses)) return '';
+  let unchecked = 0;
+  for (let i = 0; i < count; i++) {
+    if (statuses[i] !== 'checked') unchecked++;
+  }
+  if (!unchecked) return '';
+  return unchecked === 1
+    ? '1 segment still needs to be checked before sending to the client.'
+    : unchecked + ' segments still need to be checked before sending to the client.';
 }
 
 function rebuildTranslationFromSentences(sentences, paraMap) {
@@ -548,6 +589,7 @@ function buildClientJob(body, pricing = {}) {
   if (sourceLanguage === language) throw new Error('Source and translation language must be different');
   const clientEmail = sanitizeEmail(body.clientEmail);
   if (!clientEmail) throw new Error('A delivery email is required');
+  if (body.privacyAccepted !== true) throw new Error('Accept the privacy notice before sending a job');
   const qaOnly = body.qaOnly === true;
   const originalText = sanitizeText(body.originalText);
   const originalSegments = sanitizeSegments(body.originalSegments);
@@ -603,6 +645,7 @@ function buildClientJob(body, pricing = {}) {
     id: 'j_' + crypto.randomBytes(12).toString('hex'),
     clientId,
     clientEmail,
+    privacyAcceptedAt: Date.now(),
     deliveryToken: crypto.randomBytes(24).toString('hex'),
     deliveryEmailedAt: null,
     originalText,
@@ -646,6 +689,7 @@ module.exports = {
   rebuildTranslationFromSentences,
   sanitizeSentenceList,
   sanitizeSentenceStatus,
+  uncheckedSendError,
   sanitizeQaFindings,
   revisorJob,
   sourceFileForDownload,
@@ -655,6 +699,9 @@ module.exports = {
   sanitizeClientId,
   sanitizeEmail,
   sanitizeLanguage,
+  sanitizePhone,
+  sanitizeLanguageList,
+  revisorCanSeeQueuedJob,
   sanitizeText,
   maskEmail
 };

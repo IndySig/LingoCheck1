@@ -15,7 +15,16 @@ const LANG_TO_OKAPI = Object.freeze({
   Dutch: 'nl',
   Spanish: 'es',
   German: 'de',
-  English: 'en'
+  English: 'en',
+  French: 'fr',
+  Italian: 'it',
+  Portuguese: 'pt-br',
+  Arabic: 'ar',
+  Chinese: 'zh-cn',
+  Hindi: 'hi',
+  Indonesian: 'id',
+  Japanese: 'ja',
+  Korean: 'ko'
 });
 
 function languageToOkapiCode(language) {

@@ -580,11 +580,13 @@ function revisorLoginKey(r) {
   return String(r?.email || r?.username || '').toLowerCase();
 }
 
-function createRevisor({ email, displayName, password }) {
+function createRevisor({ email, displayName, password, languages, phone }) {
   const revisors = loadRevisors();
   const normalized = normalizeEmail(email);
   const exists = revisors.find(r => revisorLoginKey(r) === normalized);
   if (exists) throw new Error('Email already in use');
+  const offered = security.sanitizeLanguageList(languages);
+  if (!offered.length) throw new Error('Choose at least one language you can translate');
   const salt = crypto.randomBytes(12).toString('hex');
   const passwordHash = hashPassword(password, salt);
   const revisor = {
@@ -592,6 +594,8 @@ function createRevisor({ email, displayName, password }) {
     email: normalized,
     username: normalized,
     displayName: displayName || normalized.split('@')[0],
+    phone: security.sanitizePhone(phone),
+    languages: offered,
     salt,
     passwordHash,
     createdAt: Date.now()
@@ -599,6 +603,21 @@ function createRevisor({ email, displayName, password }) {
   revisors.push(revisor);
   saveRevisors(revisors);
   return revisor;
+}
+
+function updateRevisorAccount(id, body) {
+  const revisors = loadRevisors();
+  const idx = revisors.findIndex(r => r.id === id);
+  if (idx === -1) throw new Error('Account not found');
+  const displayName = String(body && body.displayName || '').trim().slice(0, 80);
+  if (!displayName) throw new Error('Display name is required');
+  const phone = security.sanitizePhone(body && body.phone);
+  if (!phone) throw new Error('Enter a valid phone number');
+  const languages = security.sanitizeLanguageList(body && body.languages);
+  if (!languages.length) throw new Error('Choose at least one language you can translate');
+  revisors[idx] = { ...revisors[idx], displayName, phone, languages };
+  saveRevisors(revisors);
+  return revisors[idx];
 }
 
 function findRevisorByLogin(email, password) {
@@ -625,7 +644,9 @@ function publicRevisor(r) {
     id: r.id,
     email: r.email || r.username,
     username: r.email || r.username,
-    displayName: r.displayName
+    displayName: r.displayName,
+    phone: security.sanitizePhone(r.phone) || '',
+    languages: security.sanitizeLanguageList(r.languages)
   };
 }
 
@@ -994,12 +1015,19 @@ async function callAnthropicTranslation(system, userContent, apiKey, maxTokens =
   return security.sanitizeText(data.content?.[0]?.text || '', security.MAX_TEXT_CHARS);
 }
 
+function promptLanguageName(language) {
+  if (language === 'Chinese') return 'Simplified Chinese';
+  if (language === 'Portuguese') return 'Brazilian Portuguese';
+  return language || 'English';
+}
+
 async function translateOneSentence(sentence, language, apiKey, sourceLanguage) {
   const text = String(sentence || '').trim();
   if (!text) return '';
-  const from = sourceLanguage || 'English';
+  const from = promptLanguageName(sourceLanguage || 'English');
+  const to = promptLanguageName(language);
   return callAnthropicTranslation(
-    `Translate the user's ${from} sentence to ${language}. Return ONLY the translated sentence — no quotes or commentary.`,
+    `Translate the user's ${from} sentence to ${to}. Return ONLY the translated sentence — no quotes or commentary.`,
     text,
     apiKey,
     2048
@@ -1020,9 +1048,10 @@ function splitDelimitedSentences(raw, expectedCount) {
 async function translateSentenceBatch(sentences, language, apiKey, sourceLanguage) {
   const clean = sentences.map((s) => String(s || '').trim());
   if (!clean.length) return [];
-  const from = sourceLanguage || 'English';
+  const from = promptLanguageName(sourceLanguage || 'English');
+  const to = promptLanguageName(language);
   const packed = clean.join(SENTENCE_DELIM);
-  const system = `You are a professional translator. Translate each ${from} text unit to ${language}. Units are separated by the Unicode character ␞ (U+241E). You MUST output exactly ${clean.length} translated units in the same order, each separated by ␞. Do not add, remove, merge, split, or reorder units. Return ONLY the translated units with ␞ between them — no labels or commentary.`;
+  const system = `You are a professional translator. Translate each ${from} text unit to ${to}. Units are separated by the Unicode character ␞ (U+241E). You MUST output exactly ${clean.length} translated units in the same order, each separated by ␞. Do not add, remove, merge, split, or reorder units. Return ONLY the translated units with ␞ between them — no labels or commentary.`;
   const raw = await callAnthropicTranslation(system, packed, apiKey);
   return splitDelimitedSentences(raw, clean.length);
 }
@@ -1086,7 +1115,7 @@ async function handleTranslate(req, res) {
 
   try {
     const translation = await callAnthropicTranslation(
-      `You are a professional translation engine. Translate the user's ${sourceLanguage} text to ${language}. The input is divided into paragraphs separated by blank lines (double newlines). You MUST preserve the exact same number of paragraphs in the same order, using double newlines between each translated paragraph. Translate each paragraph completely — do not merge, split, or reorder paragraphs. Return ONLY the translated text — no explanations, no quotes, no preamble.`,
+      `You are a professional translation engine. Translate the user's ${promptLanguageName(sourceLanguage)} text to ${promptLanguageName(language)}. The input is divided into paragraphs separated by blank lines (double newlines). You MUST preserve the exact same number of paragraphs in the same order, using double newlines between each translated paragraph. Translate each paragraph completely — do not merge, split, or reorder paragraphs. Return ONLY the translated text — no explanations, no quotes, no preamble.`,
       text,
       apiKey
     );
@@ -1136,17 +1165,17 @@ async function handleQaCheck(req, res) {
   }
 
   const system = [
-    `You are a professional ${language} translation editor.`,
-    `You will receive a ${sourceLanguage} source and a customer translation in ${language}.`,
+    `You are a professional ${promptLanguageName(language)} translation editor.`,
+    `You will receive a ${promptLanguageName(sourceLanguage)} source and a customer translation in ${promptLanguageName(language)}.`,
     'Correct the translation only where it misses, adds, or distorts the source, or where it contains a clear AI artifact.',
     'Do not restyle sentences that already say the same thing as the source.',
     'Keep the customer translation’s paragraph breaks. Do not merge, split, or reorder paragraphs unless a paragraph was invented or a source paragraph is missing.',
     'Respond with ONLY valid JSON (no markdown fences) in this exact shape:',
     '{"checkedTranslation":"...","summary":"one short paragraph","issues":[{"severity":"high|medium|low","detail":"..."}]}',
     'checkedTranslation is the full corrected translation. If nothing needs to change, return the customer translation unchanged, a brief reassuring summary, and an empty issues array.',
-    `Each issue should say what was wrong compared with the ${sourceLanguage} source.`
+    `Each issue should say what was wrong compared with the ${promptLanguageName(sourceLanguage)} source.`
   ].join(' ');
-  const userContent = `${sourceLanguage.toUpperCase()} SOURCE:\n${sourceText}\n\nCUSTOMER TRANSLATION:\n${text}`;
+  const userContent = `${promptLanguageName(sourceLanguage).toUpperCase()} SOURCE:\n${sourceText}\n\nCUSTOMER TRANSLATION:\n${text}`;
 
   try {
     const raw = await callAnthropicTranslation(system, userContent, apiKey, 8192);
@@ -1389,12 +1418,66 @@ async function handleOkapiMerge(req, res) {
   }
 }
 
+async function handleRevisorPreview(req, res, id, session) {
+  if (!/^[A-Za-z0-9_-]{6,64}$/.test(id)) return sendJson(res, 400, { error: 'Invalid job' });
+  const body = await readBodyJson(req, MAX_OKAPI_BODY);
+  const job = loadJobs().find(j => j.id === id);
+  if (!job) return sendJson(res, 404, { error: 'Job not found' });
+  if (job.status === 'complete') return sendJson(res, 400, { error: 'Completed jobs cannot be edited' });
+  if (!job.claimedByRevisorId || job.claimedByRevisorId !== session.revisorId) {
+    return sendJson(res, 403, { error: 'Claim this job first' });
+  }
+  const ext = String(job.sourceFile && job.sourceFile.ext || '').toLowerCase();
+  if (ext !== 'docx') return sendJson(res, 400, { error: 'This file is previewed in the editor.' });
+  const packId = job.sourceFile && job.sourceFile.packId;
+  if (!filePacks.packIdOk(packId) || !filePacks.hasPack(packId)) {
+    return sendJson(res, 404, { error: 'Upload the Word file again. The saved copy is no longer on the server.' });
+  }
+  const fullText = security.sanitizeText(body.fullText || '');
+  const translations = security.sanitizeSentenceList(body.translations);
+  if (!translations?.length && !fullText) return sendJson(res, 400, { error: 'Translated text is required' });
+  const status = okapi.getStatus();
+  if (!status.ready) return sendJson(res, 503, { error: status.message || 'Word preview is not available' });
+  const stored = filePacks.loadPack(packId);
+  try {
+    const out = okapi.mergeDocx(stored.original, stored.xliffXml, {
+      skeletons: stored.skeletons,
+      sourceLang: stored.sourceLang,
+      targetLang: stored.targetLang,
+      fileName: stored.fileName || 'document.docx',
+      translations: translations || undefined,
+      fullText
+    });
+    return sendBytes(res, 200, out, 'application/vnd.openxmlformats-officedocument.wordprocessingml.document');
+  } catch (e) {
+    console.error('[LingoCheck] Preview merge failed:', e?.message || e);
+    return sendJson(res, 502, { error: 'Could not build the preview.' });
+  }
+}
+
+function handleRevisorSource(req, res, id, session) {
+  if (!/^[A-Za-z0-9_-]{6,64}$/.test(id)) return sendJson(res, 400, { error: 'Invalid job' });
+  const job = loadJobs().find(j => j.id === id);
+  if (!job) return sendJson(res, 404, { error: 'Job not found' });
+  if (!job.claimedByRevisorId || job.claimedByRevisorId !== session.revisorId) {
+    return sendJson(res, 403, { error: 'Claim this job first' });
+  }
+  const source = security.sourceFileForDownload(job);
+  if (!source || !source.fileB64) return sendJson(res, 404, { error: 'Original file is unavailable.' });
+  return sendJson(res, 200, { name: source.name, ext: source.ext, fileB64: source.fileB64 });
+}
+
 async function handleRevisorClaim(req, res, id, session) {
   const jobs = loadJobs();
   const idx = jobs.findIndex(j => j.id === id);
   if (idx === -1) return sendJson(res, 404, { error: 'Job not found' });
   const job = jobs[idx];
   if (job.status === 'complete') return sendJson(res, 409, { error: 'Job already completed' });
+  const revisor = findRevisorById(session.revisorId);
+  const alreadyOwns = job.claimedByRevisorId === session.revisorId;
+  if (!alreadyOwns && !security.revisorCanSeeQueuedJob(revisor && revisor.languages, job.language)) {
+    return sendJson(res, 403, { error: 'This job is not in your languages' });
+  }
 
   const ownedByOther = job.claimedByRevisorId && job.claimedByRevisorId !== session.revisorId;
   if (ownedByOther && !isStaleClaim(job)) {
@@ -1614,6 +1697,13 @@ async function handleRevisorPatch(req, res, id, session) {
   const completing = body.status === 'complete' && job.status !== 'complete';
   if (completing) {
     if (!revised) return sendJson(res, 400, { error: 'Translation is required' });
+    const fromBody = Array.isArray(body.sentenceStatus)
+      ? security.sanitizeSentenceStatus(body.sentenceStatus)
+      : null;
+    const statuses = fromBody || (Array.isArray(job.sentenceStatus) ? job.sentenceStatus : null);
+    const segmentCount = fromBody ? fromBody.length : (statuses ? statuses.length : 0);
+    const blocked = security.uncheckedSendError(statuses, segmentCount);
+    if (blocked) return sendJson(res, 400, { error: blocked });
     merged.status = 'complete';
     merged.completedByRevisorId = session.revisorId;
     merged.completedAt = Date.now();
@@ -1669,6 +1759,8 @@ const server = http.createServer(async (req, res) => {
       return serveStatic(req, res, '/index.html');
     }
     if (method === 'GET' && pathname === '/login') return serveStatic(req, res, '/login.html');
+    if (method === 'GET' && pathname === '/privacy') return serveStatic(req, res, '/privacy.html');
+    if (method === 'GET' && pathname === '/about') return serveStatic(req, res, '/about.html');
     if (method === 'GET' && pathname === '/revisor') {
       if (!requireRevisor(req)) return sendRedirect(res, '/login');
       return serveStatic(req, res, '/revisor.html');
@@ -1687,7 +1779,8 @@ const server = http.createServer(async (req, res) => {
         payoutPerWordCents: pricing.payoutPerWordCents,
         staleClaimHours: STALE_CLAIM_MS / (60 * 60 * 1000),
         okapiReady: !!okapiStatus.ready,
-        okapiMessage: okapiStatus.message
+        okapiMessage: okapiStatus.message,
+        languages: security.ALLOWED_LANGUAGES
       });
     }
     if (method === 'GET' && pathname === '/api/okapi/status') {
@@ -1714,12 +1807,15 @@ const server = http.createServer(async (req, res) => {
     if (method === 'GET' && pathname === '/api/auth/me') {
       const session = requireRevisor(req);
       if (!session) return sendJson(res, 200, { authenticated: false });
+      const stored = findRevisorById(session.revisorId);
       return sendJson(res, 200, {
         authenticated: true,
         revisorId: session.revisorId,
-        email: session.email || session.username,
+        email: (stored && (stored.email || stored.username)) || session.email || session.username,
         username: session.email || session.username,
-        displayName: session.displayName
+        displayName: (stored && stored.displayName) || session.displayName,
+        phone: (stored && security.sanitizePhone(stored.phone)) || '',
+        languages: security.sanitizeLanguageList(stored && stored.languages)
       });
     }
     if (method === 'POST' && pathname === '/api/auth/signup') {
@@ -1736,8 +1832,12 @@ const server = http.createServer(async (req, res) => {
       if (!isValidEmail(email)) return sendJson(res, 400, { error: 'Enter a valid email address' });
       const pwErr = passwordPolicyError(pw);
       if (pwErr) return sendJson(res, 400, { error: pwErr, checks: passwordChecks(pw) });
+      const offered = security.sanitizeLanguageList(body.languages);
+      if (!offered.length) return sendJson(res, 400, { error: 'Choose at least one language you can translate' });
+      const phone = security.sanitizePhone(body.phone);
+      if (!phone) return sendJson(res, 400, { error: 'Enter a valid phone number' });
       try {
-        const r = createRevisor({ email, displayName: dn, password: pw });
+        const r = createRevisor({ email, displayName: dn, password: pw, languages: offered, phone });
         const challenge = await startEmailTwoFactor(req, res, r);
         if (!challenge) return sendJson(res, 500, { error: 'Could not start verification' });
         return sendJson(res, 200, challenge);
@@ -1893,11 +1993,28 @@ const server = http.createServer(async (req, res) => {
       const session = requireRevisor(req);
       if (!session) return sendJson(res, 401, { error: 'Unauthorized' });
 
+      if (method === 'POST' && pathname === '/api/revisor/account') {
+        if (!enforceJsonContentType(req, res)) return;
+        const body = await readBodyJson(req, 16 * 1024);
+        try {
+          const updated = updateRevisorAccount(session.revisorId, body);
+          return sendJson(res, 200, { ok: true, revisor: publicRevisor(updated) });
+        } catch (e) {
+          const status = e.message === 'Account not found' ? 404 : 400;
+          return sendJson(res, status, { error: e.message || 'Could not save account' });
+        }
+      }
+
       // GET /api/revisor/jobs?scope=mine|all
       if (method === 'GET' && pathname === '/api/revisor/jobs') {
         const scope = url.searchParams.get('scope') || 'mine';
         const all = loadJobs();
-        if (scope === 'all') return sendJson(res, 200, all.map(security.revisorJob));
+        const revisor = findRevisorById(session.revisorId);
+        const visible = all.filter(j => {
+          if (j.claimedByRevisorId === session.revisorId || j.completedByRevisorId === session.revisorId) return true;
+          return security.revisorCanSeeQueuedJob(revisor && revisor.languages, j.language);
+        });
+        if (scope === 'all') return sendJson(res, 200, visible.map(security.revisorJob));
         const mine = all.filter(j => j.claimedByRevisorId === session.revisorId || j.completedByRevisorId === session.revisorId);
         return sendJson(res, 200, mine.map(security.revisorJob));
       }
@@ -1941,6 +2058,18 @@ const server = http.createServer(async (req, res) => {
       const propagateMatch = pathname.match(/^\/api\/revisor\/jobs\/([^/]+)\/propagate$/);
       if (method === 'POST' && propagateMatch) {
         return await handlePropagate(req, res, propagateMatch[1], session);
+      }
+
+      const previewMatch = pathname.match(/^\/api\/revisor\/jobs\/([^/]+)\/preview$/);
+      if (method === 'POST' && previewMatch) {
+        if (!enforceRateLimit(req, res, 'revisor-preview', { limit: 10, windowMs: 60 * 1000 })) return;
+        return await handleRevisorPreview(req, res, previewMatch[1], session);
+      }
+
+      const revisorSourceMatch = pathname.match(/^\/api\/revisor\/jobs\/([^/]+)\/source$/);
+      if (method === 'GET' && revisorSourceMatch) {
+        if (!enforceRateLimit(req, res, 'revisor-source', { limit: 20, windowMs: 60 * 1000 })) return;
+        return handleRevisorSource(req, res, revisorSourceMatch[1], session);
       }
 
       // PATCH /api/revisor/jobs/:id

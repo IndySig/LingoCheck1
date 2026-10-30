@@ -28,6 +28,13 @@ test("the reviewer can see the summary while the job is still open", function ()
   assert.equal(security.revisorJob(job("in_progress")).qaFindings.summary, "One wording change.");
 });
 
+test("a completed send is rejected while any segment is unchecked", function () {
+  assert.equal(security.uncheckedSendError(["checked", ""], 2), "1 segment still needs to be checked before sending to the client.");
+  assert.equal(security.uncheckedSendError(["", ""], 2), "2 segments still need to be checked before sending to the client.");
+  assert.equal(security.uncheckedSendError(["checked", "checked"], 2), "");
+  assert.equal(security.uncheckedSendError(null, 3), "");
+});
+
 test("sentence status only keeps checked or blank", function () {
   assert.deepEqual(security.sanitizeSentenceStatus(["checked", "done", 1, "checked"]), ["checked", "", "", "checked"]);
   assert.deepEqual(security.revisorJob(job("in_progress")).sentenceStatus, ["checked", "", "checked"]);
