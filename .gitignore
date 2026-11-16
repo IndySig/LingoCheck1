@@ -16,3 +16,7 @@ revisors.json
 # Uploaded Word files kept for download (not source)
 data/
 
+# One-off site export for review, not part of the app
+public/lingocheck-site-review.zip
+public/download-site.html
+

@@ -1,0 +1,57 @@
+@keyframes lc-screen {
+  from { opacity: 0; transform: translateY(28px) scale(0.975); }
+  to { opacity: 1; transform: none; }
+}
+@keyframes fadeUp {
+  from { opacity: 0; transform: translateY(28px) scale(0.975); }
+  to { opacity: 1; transform: none; }
+}
+@keyframes rise {
+  from { opacity: 0; transform: translateY(28px) scale(0.975); }
+  to { opacity: 1; transform: none; }
+}
+
+.lc-screen,
+.page,
+main.lc-page {
+  animation: lc-screen 0.62s cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+button.primary:hover,
+a.primary:hover,
+.lc-privacy-full:hover {
+  opacity: 1;
+  transform: translateY(-3px);
+  box-shadow: 0 16px 36px rgba(109, 79, 216, 0.3);
+}
+.lc-nav-pill a:hover,
+.nav-links a:hover {
+  opacity: 1;
+  transform: translateY(-2px);
+  box-shadow: 0 10px 24px rgba(42, 36, 56, 0.1);
+}
+button:not(:disabled):active,
+button.primary:hover:active,
+a.primary:active,
+.lc-nav-pill a:active,
+.nav-links a:active,
+.lc-privacy-full:active,
+.lc-privacy-close:active {
+  transform: translateY(1px) scale(0.96);
+  box-shadow: 0 4px 12px rgba(42, 36, 56, 0.08);
+  transition-duration: 0.1s;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .lc-screen, .page, main.lc-page { animation: none; }
+  button.primary:hover,
+  a.primary:hover,
+  .lc-privacy-full:hover,
+  .lc-nav-pill a:hover,
+  .nav-links a:hover,
+  button:not(:disabled):active,
+  button.primary:hover:active,
+  a.primary:active,
+  .lc-nav-pill a:active,
+  .nav-links a:active { transform: none; }
+}

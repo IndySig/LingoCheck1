@@ -186,6 +186,22 @@ function runTikal(args, cwd) {
   return out;
 }
 
+const OPENXML_FILTER_ID = 'okf_openxml@lc';
+const OPENXML_FILTER = [
+  '#v1',
+  'translateWordGraphicName.b=false',
+  'translateWordGraphicDescription.b=false',
+  'translatePowerpointGraphicName.b=false',
+  'translatePowerpointGraphicDescription.b=false',
+  'parametersClass=net.sf.okapi.filters.openxml.ConditionalParameters',
+  ''
+].join('\n');
+
+function openXmlTikalArgs(args, workDir) {
+  fs.writeFileSync(path.join(workDir, `${OPENXML_FILTER_ID}.fprm`), OPENXML_FILTER, 'utf8');
+  return ['-fc', OPENXML_FILTER_ID, '-pd', workDir].concat(args);
+}
+
 function makeTempDir(prefix) {
   const dir = path.join(os.tmpdir(), `${prefix}-${crypto.randomBytes(8).toString('hex')}`);
   fs.mkdirSync(dir, { recursive: true });
@@ -220,10 +236,11 @@ function encodeXmlText(s) {
     .replace(/'/g, '&apos;');
 }
 
-/** Word stores a drawing's file name as its own trans-unit. That is not body text. */
+/** A photo name or file is not body text. Word stores it as "Picture 1". */
 function isImageAssetText(text) {
   const t = String(text || '').replace(/\s+/g, ' ').trim();
   if (!t || t.length > 180) return false;
+  if (/^(?:picture|image|afbeelding|foto|abbildung|imagen|img)\s*\d+$/i.test(t)) return true;
   const withoutExt = t.replace(/\.(png|jpe?g|gif|bmp|tif|tiff|emf|wmf|svg|webp)$/i, '');
   if (/[.!?]/.test(withoutExt)) return false;
   return /^(?:picture\s+\d+[_ ].+|[\w .()\-]+\.(?:png|jpe?g|gif|bmp|tif|tiff|emf|wmf|svg|webp))$/i.test(t);
@@ -309,19 +326,24 @@ function tokenizeInline(inner) {
   return parts;
 }
 
-function splitCharsByWeights(text, weights) {
-  const chars = Array.from(String(text || ''));
+function splitWordsByWeights(text, weights) {
+  const words = String(text || '').trim().split(/\s+/).filter(Boolean);
   if (!weights.length) return [];
+  if (weights.length === 1 || words.length <= 1) return [words.join(' ')];
   const total = weights.reduce((sum, n) => sum + n, 0) || 1;
   const out = [];
   let cursor = 0;
   let consumed = 0;
   for (let i = 0; i < weights.length; i++) {
     consumed += weights[i];
+    const remainingSlots = weights.length - i - 1;
     const end = i === weights.length - 1
-      ? chars.length
-      : Math.max(cursor, Math.min(chars.length, Math.round(chars.length * (consumed / total))));
-    out.push(chars.slice(cursor, end).join(''));
+      ? words.length
+      : Math.max(
+          cursor,
+          Math.min(words.length - remainingSlots, Math.round(words.length * (consumed / total)))
+        );
+    out.push(words.slice(cursor, end).join(' '));
     cursor = end;
   }
   return out;
@@ -353,12 +375,22 @@ function fillInline(sourceInner, translated) {
   if (sourcePlain === next) return String(sourceInner || '');
   const parts = tokenizeInline(sourceInner);
   const textSlots = [];
+  let codeDepth = 0;
   parts.forEach((part, index) => {
-    if (part.type === 'text' && part.value.replace(/\s+/g, '').length) textSlots.push(index);
+    if (part.type === 'tag') {
+      const name = (part.value.match(/^<\/?([A-Za-z0-9]+)/) || [])[1] || '';
+      const code = /^(bpt|ept|ph|it|x|bx|ex|sc|ec)$/i.test(name);
+      if (code && !/\/>\s*$/.test(part.value)) {
+        codeDepth += /^<\//.test(part.value) ? -1 : 1;
+        if (codeDepth < 0) codeDepth = 0;
+      }
+      return;
+    }
+    if (codeDepth === 0 && part.value.replace(/\s+/g, '').length) textSlots.push(index);
   });
   if (!textSlots.length) return encodeXmlText(next);
   const weights = textSlots.map((index) => Math.max(1, parts[index].value.replace(/\s+/g, '').length));
-  const chunks = textSlots.length === 1 ? [next] : splitCharsByWeights(next, weights);
+  const chunks = textSlots.length === 1 ? [next] : splitWordsByWeights(next, weights);
   textSlots.forEach((index, n) => {
     const original = parts[index].value;
     const lead = /^\s/.test(original) ? (original.match(/^\s*/) || [''])[0] : '';
@@ -512,14 +544,18 @@ function parseXliff(xliffXml) {
     const fullText = xliffInnerToPlain(sourceInner);
     if (!fullText && !mrks.length) continue;
 
-    const sentences = mrks.length
+    const rawSentences = mrks.length
       ? mrks.map((s) => s.text)
       : [fullText];
-    if (sentences.length && sentences.every((sentence) => isImageAssetText(sentence))) continue;
+    const sentences = rawSentences.filter((sentence) => !isImageAssetText(sentence));
+    if (!sentences.length) continue;
 
+    const visibleText = rawSentences.some((sentence) => isImageAssetText(sentence))
+      ? sentences.join(' ')
+      : (fullText || sentences.join(' '));
     units.push({
       id,
-      text: fullText || sentences.join(' '),
+      text: visibleText,
       sentences,
       mrks: mrks.length ? mrks : sentences.map((text, i) => ({ mid: String(i), text }))
     });
@@ -575,23 +611,29 @@ function applyTranslationsToXliff(xliffXml, translations) {
     const mrks = extractMrkSegments(sourceInner);
     const fullText = xliffInnerToPlain(sourceInner);
     if (!fullText && !mrks.length) return full;
-    const unitSentences = mrks.length ? mrks.map((mk) => mk.text) : [fullText];
-    if (unitSentences.every((sentence) => isImageAssetText(sentence))) return full;
+    const slots = mrks.length
+      ? mrks
+      : [{ mid: '0', text: fullText, inner: sourceInner }];
+    const translatable = slots.filter((slot) => !isImageAssetText(slot.text));
+    if (!translatable.length) return full;
 
-    const count = mrks.length || 1;
     const parts = [];
-    for (let i = 0; i < count; i++) {
+    for (let i = 0; i < translatable.length; i++) {
       parts.push(list[cursor + i] != null ? list[cursor + i] : '');
     }
-    cursor += count;
+    cursor += translatable.length;
+    let local = 0;
+    const filled = slots.map((slot) => (
+      isImageAssetText(slot.text) ? slot.inner : fillInline(slot.inner, parts[local++] || '')
+    ));
 
     let targetXml;
     if (mrks.length) {
-      targetXml = mrks
-        .map((mk, i) => `<mrk mid="${encodeXmlText(mk.mid)}" mtype="seg">${encodeXmlText(parts[i])}</mrk>`)
+      targetXml = slots
+        .map((slot, i) => `<mrk mid="${encodeXmlText(slot.mid)}" mtype="seg">${filled[i]}</mrk>`)
         .join(' ');
     } else {
-      targetXml = encodeXmlText(parts[0] || '');
+      targetXml = filled[0] || '';
     }
 
     if (/<target\b[^>]*>[\s\S]*?<\/target>/i.test(body)) {
@@ -627,7 +669,7 @@ function extractDocx(docxBuffer, opts = {}) {
     fs.writeFileSync(inputPath, docxBuffer);
 
     // Run inside workDir so relative paths match what Tikal expects on merge.
-    runTikal(['-x', '-seg', '-sl', sourceLang, '-tl', targetLang, baseName], workDir);
+    runTikal(openXmlTikalArgs(['-x', '-seg', '-sl', sourceLang, '-tl', targetLang, baseName], workDir), workDir);
 
     const xlfPath = path.join(workDir, `${baseName}.xlf`);
     if (!fs.existsSync(xlfPath)) {
@@ -691,7 +733,7 @@ function mergeDocx(originalDocx, xliffXml, opts = {}) {
     }
 
     const xlfName = `${baseName}.xlf`;
-    runTikal(['-m', '-sl', sourceLang, '-tl', targetLang, xlfName], workDir);
+    runTikal(openXmlTikalArgs(['-m', '-sl', sourceLang, '-tl', targetLang, xlfName], workDir), workDir);
 
     const outName = baseName.replace(/(\.[^.]+)$/, '.out$1');
     let outPath = path.join(workDir, outName);
