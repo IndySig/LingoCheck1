@@ -104,6 +104,9 @@
   }
 </style>
 <link rel="stylesheet" href="/motion.css">
+<link rel="stylesheet" href="/brand-refresh.css?v=nav1">
+<link rel="stylesheet" href="/letter-field.css?v=river6">
+<script src="/brand-refresh.js?v=river5"></script>
 </head>
 <body>
 <div id="root"></div>
@@ -1370,23 +1373,17 @@ function ClientView({clientId}){
         e("div",{className:"lc-display",style:{fontSize:16,fontWeight:500,color:C.green}},"Save ",formatEuro(savings)," vs agency"),
         e("div",{style:{fontSize:12,color:C.muted,marginTop:3}},"Updates as you paste or upload")
       )
-      :e("div",{style:{fontSize:13,color:C.muted,lineHeight:1.5,marginTop:4}},"Paste or upload text to see your live estimate.")
+      :e("div",{style:{fontSize:13,color:C.muted,lineHeight:1.5,marginTop:4}},"Paste or upload text to see your live estimate."),
+    e("div",{style:{fontSize:12,color:C.muted,lineHeight:1.5,marginTop:12}},"This price includes the AI check, a human review, and one correction round. The file comes back within 1 working day.")
   );
 
-  return e(React.Fragment,null,header,e("div",{style:{maxWidth:1080,margin:"0 auto",padding:pagePad}},
+  return e(React.Fragment,null,header,e("div",{className:"brand-shell",style:{maxWidth:1200,margin:"0 auto",padding:pagePad}},
 
     stage==="idle"&&e("div",{className:"lc-screen"},
-      e("section",{style:{padding:isCompact?"28px 0 18px":"36px 0 22px"}},
-        e("h1",{className:"lc-display",style:{fontSize:"var(--font-display)",fontWeight:400,lineHeight:1.12,color:C.text,marginBottom:10,letterSpacing:"-0.03em",maxWidth:720}},
-          useOwnAi
-            ? e(React.Fragment,null,"Already translated? We’ll ",e("em",{style:{fontStyle:"italic",color:C.accent}},"check")," it.")
-            : e(React.Fragment,null,"Translation that feels ",e("em",{style:{fontStyle:"italic",color:C.accent}},"human"),".")
-        ),
-        e("p",{style:{...st.muted,maxWidth:560,margin:0,fontSize:isCompact?15:16}},
-          useOwnAi
-            ?"Paste the AI translation you already have and upload the "+sourceLanguage+" source. We check it against the original, then a real person proofreads every change."
-            :"Need a full translation from "+sourceLanguage+"? Our AI drafts every language you select, then a human revisor makes each one sound right."
-        )
+      e(window.LcLanding),
+      e("div",{className:"brand-workspace-title",id:"review-start"},
+        e("div",null,e("span",{className:"brand-small"},"YOUR NEXT STEP"),e("h2",null,"Good translations start here.")),
+        e("p",null,"Bring your source and AI translation. Compare, refine and review in one workspace.")
       ),
 
       howItWorks,
@@ -1407,7 +1404,12 @@ function ClientView({clientId}){
             e("span",{style:{fontSize:12,fontWeight:600,color:C.accent,background:C.lilac,padding:"5px 12px",borderRadius:999}},useOwnAi?"Quality check":"Full translation")
           ),
           useOwnAi
-            ?e("div",{style:{background:"rgba(255,255,255,0.55)",border:`1px solid ${C.border}`,borderRadius:16,padding:"12px 14px",marginBottom:16,fontSize:13,color:C.muted,lineHeight:1.55}},"Paste or upload the translation you already made with AI, then upload the "+sourceLanguage+" source it was made from. We check it against that source before a revisor proofreads.")
+            ?e("div",{style:{background:"rgba(255,255,255,0.55)",border:`1px solid ${C.border}`,borderRadius:16,padding:"12px 14px",marginBottom:16,fontSize:13,color:C.muted,lineHeight:1.55}},
+              e("div",{style:{fontWeight:600,color:C.text,marginBottom:6}},"Add both texts"),
+              e("div",null,"1. Paste the translation you already have from AI in the box below, or upload that file."),
+              e("div",null,"2. Upload the original "+sourceLanguage+" text. That is the text before it was translated."),
+              e("div",{style:{marginTop:6}},"We compare the two. A reviewer then checks the translation.")
+            )
             :e("div",{style:{background:"rgba(255,255,255,0.55)",border:`1px solid ${C.border}`,borderRadius:16,padding:"12px 14px",marginBottom:16,fontSize:13,color:C.muted,lineHeight:1.55}},"Paste the "+sourceLanguage+" source. Choose one or more languages. We’ll draft each one, then a revisor refines it."),
           useOwnAi
             ?e("div",{style:{display:"flex",flexDirection:"column",gap:10,marginBottom:16}},

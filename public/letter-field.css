@@ -1,0 +1,57 @@
+/* The letter scene is a viewport, never a physical container. */
+.brand-hero{padding:36px 0 32px!important}.brand-hero-grid{min-height:0!important;display:block!important}.brand-hero-content{position:relative!important;top:auto!important;padding:15px 10px 20px!important;max-width:none;display:grid;grid-template-columns:1.35fr .65fr;column-gap:65px;align-items:center}
+.brand-eyebrow{grid-column:1/-1;margin-bottom:22px}.brand-hero h1{grid-row:2/5;font-size:clamp(42px,5.1vw,69px);margin:0;line-height:1.08}.kinetic-line{display:block!important;color:#2a2438!important}.kinetic-line:last-child{color:#6d4fd8!important}.kinetic-word{display:inline-block;white-space:nowrap}.kinetic-char{display:inline-block;transition:none;will-change:transform}.brand-intro{font-size:14px;grid-column:2}.brand-actions{grid-column:2;margin:19px 0 14px;gap:8px}.brand-button{font-size:11px;padding:12px 15px;gap:8px}.brand-trust{grid-column:2;line-height:1.7;font-size:8px}
+.glyph-scroll{position:relative;height:1450px;--field-progress:0;margin:0 0 35px}.glyph-sticky{position:sticky;top:105px;padding:0 0 15px}.glyph-panel{position:relative;isolation:isolate;height:clamp(340px,42vw,510px);overflow:hidden;border-radius:28px;background:#e8e0f0;border:1px solid #ddd3e8;perspective:720px;touch-action:pan-y;box-shadow:0 25px 55px -40px #82699e;cursor:crosshair}
+.glyph-panel:before{content:'';position:absolute;inset:0;background:radial-gradient(ellipse at 42% 20%,#fffdf8 0%,rgba(249,245,252,.7) 35%,transparent 75%),linear-gradient(150deg,#f1ecf6,#e2d7ed);z-index:-1}
+.glyph-layer{position:absolute;inset:0;transform-style:preserve-3d;transition:transform .4s ease-out;pointer-events:none}.glyph-body{position:absolute;left:0;top:0;transform-style:preserve-3d;width:.8em;height:1em;font:900 var(--glyph-size,130px)/1 Arial,Helvetica,sans-serif;letter-spacing:-.06em;color:#6d4fd8;--side:#8061bb;--front:#7752d4;--shine:#b9a1ef}
+.glyph-body>span{position:absolute;inset:0;display:block;text-align:center}.glyph-edge{color:var(--side);text-shadow:1px 1px var(--side),-1px -1px var(--side)}.glyph-face{color:var(--front);background:linear-gradient(135deg,var(--shine) 2%,var(--front) 38%,var(--side) 92%);background-clip:text;-webkit-background-clip:text;-webkit-text-fill-color:transparent;filter:drop-shadow(0 1px 0 rgba(255,255,255,.4))}.glyph-body:before{content:attr(data-letter);position:absolute;inset:0;filter:blur(12px)}.glyph-edge:first-child{text-shadow:6px 12px 13px rgba(62,39,93,.2)}
+.glyph-pearl{--front:#fffdf9;--shine:#ffffff;--side:#c8bdd5}.glyph-ink{--front:#554761;--shine:#a594b6;--side:#3b314b}.glyph-lilac{--front:#c5b0eb;--shine:#f2e7ff;--side:#9e83c5}
+.glyph-panel-top,.glyph-panel-bottom{position:absolute;left:23px;right:23px;display:flex;justify-content:space-between;align-items:center;gap:12px;z-index:5;pointer-events:none;font-size:9px;letter-spacing:.1em;color:#776785}.glyph-panel-top{top:21px}.glyph-panel-bottom{bottom:18px;letter-spacing:.025em}.glyph-panel-bottom>div{display:flex;gap:8px;pointer-events:auto}.glyph-panel-bottom button{font:11px Manrope,sans-serif;color:#5b3fc4;border:1px solid #cabbdf;background:rgba(255,253,249,.86);border-radius:24px;padding:9px 14px;cursor:pointer}.glyph-panel-bottom button:hover{background:#fff}.glyph-caption{display:flex;justify-content:space-between;gap:20px;padding:19px 3px;color:#6a6178;font-size:11px}.glyph-caption span:last-child{font-size:9px;letter-spacing:.12em}.brand-proof{margin-top:0}
+@media(max-width:760px){.brand-hero{padding-top:10px!important}.brand-hero-content{display:block;padding:10px 0!important}.brand-hero h1{font-size:clamp(40px,8.6vw,62px);margin:0 0 22px}.brand-intro{max-width:490px}.brand-actions{margin:20px 0 12px}.brand-trust{font-size:9px}.glyph-scroll{height:1150px}.glyph-sticky{top:100px}.glyph-panel{height:410px;border-radius:22px}.glyph-panel-top,.glyph-panel-bottom{left:16px;right:16px;font-size:7px}.glyph-panel-bottom{align-items:end}.glyph-panel-bottom>span{max-width:120px;line-height:1.6}.glyph-panel-bottom button{font-size:10px;padding:8px 11px}.glyph-caption{font-size:9px}.glyph-caption span:last-child{font-size:7px}.glyph-body{font-size:var(--glyph-size,75px)}}
+@media(prefers-reduced-motion:reduce){.kinetic-char{transform:none!important;transition:none}.glyph-layer{transform:none!important;transition:none}.glyph-scroll{height:auto}.glyph-sticky{position:relative;top:auto}}
+
+/* Living brand colour, driven by the same pointer/scroll timeline as the letters. */
+body{background:#faf4ff!important;isolation:isolate}
+body::before{display:block!important;content:'';position:fixed;inset:0;z-index:-1;pointer-events:none;background:radial-gradient(ellipse at var(--ambient-x,60%) var(--ambient-y,15%),#d9c4ff 0%,transparent 58%),radial-gradient(ellipse at 0% 70%,#ead7ff 0%,transparent 65%),linear-gradient(125deg,#fff8ed,#f7eeff 60%,#eee6ff);transition:background-position 1s}
+#root>header{background:transparent!important;border:0!important;box-shadow:none!important}
+.glyph-panel{background:#bba0ed;border:0;box-shadow:0 28px 65px -32px #8d64c55c;--light-x:50%;--light-y:50%;--flow-angle:125deg;--flow-x:0%;--flow-y:0%}
+.glyph-panel:before{inset:-25%;background:radial-gradient(ellipse at var(--light-x) var(--light-y),#fff8f0 0%,#efd6ff99 24%,transparent 55%),radial-gradient(ellipse at 12% 80%,#c69aef 0%,transparent 50%),linear-gradient(var(--flow-angle),#a58ae9 0%,#d6a9ef 36%,#f6d9ef 62%,#b9a3f2 100%);transform:translate(var(--flow-x),var(--flow-y));will-change:transform}
+.glyph-panel:after{content:'';position:absolute;inset:-50%;z-index:-1;pointer-events:none;background:conic-gradient(from 30deg at 45% 48%,transparent,#fff8e880,transparent 32%,#7953d836,transparent 68%,#ffe8f24d,transparent);filter:blur(35px);animation:colour-current 24s ease-in-out infinite alternate;animation-play-state:var(--motion-state,running);mix-blend-mode:soft-light}
+@keyframes colour-current{from{transform:rotate(-18deg) scale(1)}to{transform:rotate(35deg) scale(1.2)}}
+.glyph-panel-top,.glyph-panel-bottom{color:#443054}.glyph-panel-top span{background:#fff7;padding:7px 10px;border-radius:20px;backdrop-filter:blur(10px)}
+.glyph-brand{--front:#6540c3;--shine:#c3a3ff;--side:#49308b}.glyph-pearl{--front:#fff9ef;--shine:#fff;--side:#c7afd9}
+@media(prefers-reduced-motion:reduce){.glyph-panel:after{animation:none}.glyph-panel:before{transform:none}.kinetic-char{will-change:auto}}
+
+/* Deep extruded letterforms: continuous sides and a polished face. */
+.glyph-edge{color:var(--side);text-shadow:.5px .5px var(--side),-.5px -.5px var(--side)}
+.glyph-edge:nth-child(3n){color:color-mix(in srgb,var(--side) 92%,#fff)}
+.glyph-edge:first-child{text-shadow:8px 14px 7px #39225b38,14px 24px 22px #39225b30}
+.glyph-face{background:linear-gradient(135deg,var(--shine) 0%,var(--front) 30%,var(--front) 60%,var(--side) 100%);background-clip:text;-webkit-background-clip:text;-webkit-text-stroke:.6px color-mix(in srgb,var(--shine) 60%,var(--front));filter:drop-shadow(1px 1px 0 var(--side)) drop-shadow(-1px -1px 0 #ffffff88)}
+.glyph-brand{--front:#8055e7;--shine:#ddc8ff;--side:#432778}.glyph-lilac{--front:#d3bafa;--shine:#fff0ff;--side:#8062b2}.glyph-pearl{--front:#fff9ff;--shine:#fff;--side:#ad95c6}
+/* Header is nested inside the React shell; target the actual navigation bar. */
+#root header{background:transparent!important;border:0!important;box-shadow:none!important;backdrop-filter:none!important;-webkit-backdrop-filter:none!important}
+#root header .lc-nav-pill{background:linear-gradient(110deg,#f7efff,#eadcff 52%,#fff1f8)!important;border:1px solid rgba(255,255,255,.9)!important;border-radius:999px!important;box-shadow:0 10px 28px rgba(109,79,216,.12)!important}
+.demo-bar{background:linear-gradient(100deg,#f6edff,#e9ddfb,#f9edfa)!important;border-bottom:1px solid #fff9!important}
+
+.glyph-edge{text-shadow:1px 1px var(--side),-1px -1px var(--side),1px -1px var(--side),-1px 1px var(--side)}
+
+.glyph-edge:nth-child(3n){color:var(--side)}
+/* Paint the colour once; animate only its composited transform. */
+.glyph-panel:before,.glyph-panel:after{display:none}
+.glyph-atmosphere{position:absolute;inset:-25%;z-index:-1;pointer-events:none;background:radial-gradient(ellipse at 55% 42%,#fff8f0,transparent 50%),radial-gradient(ellipse at 12% 80%,#c69aef,transparent 50%),linear-gradient(125deg,#a58ae9,#d6a9ef 36%,#f6d9ef 62%,#b9a3f2);will-change:transform}
+.glyph-panel-bottom{position:relative;left:auto;right:auto;bottom:auto;padding:15px 3px 0;pointer-events:auto;min-height:48px}
+.glyph-caption{padding-top:12px}
+.glyph-layer{transition:none;will-change:transform}.glyph-body{will-change:auto}
+.glyph-body:before{content:none!important;filter:none!important}
+.glyph-face{filter:none;-webkit-text-stroke:0}
+.glyph-edge,.glyph-edge:nth-child(3n),.glyph-edge:first-child,.glyph-edge:nth-child(2){text-shadow:none}
+.glyph-edge:nth-child(-n+3){color:color-mix(in srgb,var(--side) 72%,#241433)}
+.glyph-edge:nth-child(n+4):nth-child(-n+7){color:color-mix(in srgb,var(--side) 58%,var(--front))}
+.glyph-edge:nth-child(n+8){color:color-mix(in srgb,var(--shine) 28%,var(--side))}
+.glyph-panel-top span{backdrop-filter:none}
+.glyph-panel{perspective:720px!important}
+.glyph-face{background:linear-gradient(118deg,#ffffff 0%,var(--shine) 10%,var(--front) 26%,var(--front) 70%,var(--side) 100%) var(--gx,18%) var(--gy,12%) / 230% 230%;background-clip:text;-webkit-background-clip:text;-webkit-text-fill-color:transparent}
+@media(prefers-reduced-motion:reduce){.glyph-atmosphere{transform:none!important;will-change:auto}}
+#root{position:relative;z-index:1}
+.brand-river-page{position:absolute;left:0;top:0;width:100%;z-index:0;pointer-events:none}
+.brand-river-stroke{fill:none;stroke:#6d4fd8;stroke-linecap:round;stroke-linejoin:round}
