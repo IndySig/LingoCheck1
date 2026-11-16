@@ -2,6 +2,11 @@
 
 Korte check of de app werkt voor **klanten** én **revisoren**. Geen echte AI-key nodig (demo-modus is ok).
 
+| Soort check | Waar |
+|-------------|------|
+| **Handmatig** (browser, voor niet-technische tester) | [HANDLEIDING.md](HANDLEIDING.md) |
+| **Automatisch** | `npm run smoke` (dit document) |
+
 ## Snel starten (lokaal)
 
 1. Start de server in één terminal:
