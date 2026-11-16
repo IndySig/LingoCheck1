@@ -310,6 +310,42 @@ function rebuildTranslationFromSentences(sentences, paraMap) {
   return buckets.map((b) => b.join(' ')).filter(Boolean).join('\n\n');
 }
 
+const TONES = ['formal', 'neutral', 'informal'];
+const PURPOSES = ['general', 'hotel', 'contract', 'legal', 'website', 'marketing', 'email', 'manual', 'medical', 'technical', 'academic', 'menu', 'product', 'news', 'app', 'financial', 'tourism', 'cv'];
+
+function sanitizeTone(value) {
+  const tone = String(value || '').toLowerCase();
+  return TONES.includes(tone) ? tone : 'neutral';
+}
+
+function sanitizePurpose(value) {
+  const purpose = String(value || '').toLowerCase();
+  return PURPOSES.includes(purpose) ? purpose : 'general';
+}
+
+function sanitizeGlossary(raw) {
+  const lines = Array.isArray(raw) ? raw : String(raw || '').split(/\r?\n/);
+  const pairs = [];
+  for (const line of lines) {
+    if (pairs.length >= 40) break;
+    let source = '';
+    let target = '';
+    if (line && typeof line === 'object') {
+      source = line.source;
+      target = line.target;
+    } else {
+      const parts = String(line || '').split(/\s*(?:→|->|=)\s*/);
+      if (parts.length < 2) continue;
+      source = parts[0];
+      target = parts.slice(1).join(' ');
+    }
+    source = sanitizeText(source, 80);
+    target = sanitizeText(target, 80);
+    if (source && target) pairs.push({ source, target });
+  }
+  return pairs;
+}
+
 function sanitizeQaFindings(raw) {
   if (!raw || typeof raw !== 'object') return null;
   const summary = sanitizeText(raw.summary || '', 2000);
@@ -324,6 +360,67 @@ function sanitizeQaFindings(raw) {
   }).filter((item) => item && item.detail);
   if (!summary && !issues.length) return null;
   return { summary: summary || '', issues };
+}
+
+function questionThread(job) {
+  if (!job) return [];
+  const raw = Array.isArray(job.questionThread) ? job.questionThread : [];
+  const items = [];
+  for (const item of raw.slice(-40)) {
+    if (!item || typeof item !== 'object') continue;
+    const question = sanitizeText(item.question || '', 1000);
+    if (!question) continue;
+    const reply = sanitizeText(item.reply || '', 1000);
+    items.push({
+      question,
+      askedAt: Number(item.askedAt) || null,
+      reply,
+      repliedAt: reply ? (Number(item.repliedAt) || null) : null
+    });
+  }
+  const legacyQ = sanitizeText(job.clientQuestion || '', 1000);
+  const legacyR = sanitizeText(job.clientReply || '', 1000);
+  if (legacyQ) {
+    const last = items[items.length - 1];
+    if (!last || last.question !== legacyQ) {
+      items.push({
+        question: legacyQ,
+        askedAt: Number(job.clientQuestionAt) || null,
+        reply: legacyR,
+        repliedAt: legacyR ? (Number(job.clientRepliedAt) || null) : null
+      });
+    } else if (legacyR && last.reply !== legacyR) {
+      last.reply = legacyR;
+      last.repliedAt = Number(job.clientRepliedAt) || last.repliedAt;
+    }
+  }
+  return items.slice(-40);
+}
+
+function appendQuestion(job, question, askedAt) {
+  const items = questionThread(job);
+  const text = sanitizeText(question || '', 1000);
+  if (!text) return items;
+  items.push({
+    question: text,
+    askedAt: askedAt || Date.now(),
+    reply: '',
+    repliedAt: null
+  });
+  return items.slice(-40);
+}
+
+function answerLatestQuestion(job, reply, repliedAt) {
+  const items = questionThread(job);
+  const text = sanitizeText(reply || '', 1000);
+  if (!items.length) return items;
+  const last = items[items.length - 1];
+  items[items.length - 1] = {
+    ...last,
+    reply: text,
+    repliedAt: text ? (repliedAt || Date.now()) : null
+  };
+  return items;
 }
 
 function publicJob(job) {
@@ -346,6 +443,13 @@ function publicJob(job) {
     originalSegments: Array.isArray(job.originalSegments) ? job.originalSegments : null,
     language: job.language,
     sourceLanguage: sanitizeLanguage(job.sourceLanguage) || 'English',
+    tone: sanitizeTone(job.tone),
+    purpose: sanitizePurpose(job.purpose),
+    glossary: sanitizeGlossary(job.glossary),
+    clientQuestion: sanitizeText(job.clientQuestion || '', 1000),
+    clientReply: sanitizeText(job.clientReply || '', 1000),
+    revisionNote: sanitizeText(job.revisionNote || '', 2000),
+    revisionRound: Math.max(0, Math.min(1, Number(job.revisionRound) | 0)),
     aiTranslation: job.aiTranslation,
     qaOnly: !!job.qaOnly,
     qaFindings: job.status === 'complete' ? sanitizeQaFindings(job.qaFindings) : null,
@@ -385,6 +489,7 @@ function revisorJob(job) {
     sourceWordCount: typeof job.sourceWordCount === 'number' ? job.sourceWordCount : undefined,
     priceCents: typeof job.priceCents === 'number' ? job.priceCents : undefined,
     payoutCents: typeof job.payoutCents === 'number' ? job.payoutCents : undefined,
+    questionThread: questionThread(job),
     claimedByRevisorId: job.claimedByRevisorId || null,
     claimedAt: job.claimedAt || null,
     completedByRevisorId: job.completedByRevisorId || null,
@@ -655,6 +760,14 @@ function buildClientJob(body, pricing = {}) {
     sentenceParaMap,
     language,
     sourceLanguage,
+    tone: sanitizeTone(body.tone),
+    purpose: sanitizePurpose(body.purpose),
+    glossary: sanitizeGlossary(body.glossary),
+    clientQuestion: '',
+    clientReply: '',
+    questionThread: [],
+    revisionNote: '',
+    revisionRound: 0,
     aiTranslation: finalAi,
     customerTranslation: qaOnly ? customerTranslation : null,
     bundleId,
@@ -692,6 +805,9 @@ module.exports = {
   uncheckedSendError,
   sanitizeQaFindings,
   revisorJob,
+  questionThread,
+  appendQuestion,
+  answerLatestQuestion,
   sourceFileForDownload,
   sanitizeOkapiPackage,
   rateLimit,
@@ -699,6 +815,9 @@ module.exports = {
   sanitizeClientId,
   sanitizeEmail,
   sanitizeLanguage,
+  sanitizeTone,
+  sanitizePurpose,
+  sanitizeGlossary,
   sanitizePhone,
   sanitizeLanguageList,
   revisorCanSeeQueuedJob,

@@ -100,6 +100,7 @@
     *,*::before,*::after{animation-duration:0.01ms!important;transition-duration:0.01ms!important;}
   }
 </style>
+<link rel="stylesheet" href="/motion.css">
 </head>
 <body>
 <div id="app"></div>
@@ -109,7 +110,7 @@
 const C={deep:"#2a2438",mid:"#5b3fc4",accent:"#6d4fd8",light:"#6d4fd8",pale:"#6d4fd8",lilac:"#d9d0f5",surface:"#ffffff",card:"#ffffff",border:"rgba(42,36,56,0.10)",text:"#2a2438",muted:"#6a6178",white:"#ffffff",green:"#1f7a4d",greenBg:"rgba(238,247,241,0.9)",greenBorder:"rgba(31,122,77,0.18)",soft:"rgba(255,255,255,0.55)"};
 const st={
   card:{background:"rgba(255,255,255,0.72)",border:"1px solid rgba(255,255,255,0.8)",borderRadius:28,padding:28,boxShadow:"0 20px 60px rgba(42,36,56,0.08)"},
-  btn:{fontFamily:"inherit",cursor:"pointer",border:"none",borderRadius:999,fontWeight:600,transition:"transform 0.2s cubic-bezier(0.22,1,0.36,1), opacity 0.2s, background 0.2s, border-color 0.2s, box-shadow 0.2s"},
+  btn:{fontFamily:"inherit",cursor:"pointer",border:"none",borderRadius:999,fontWeight:600,transition:"transform 0.28s cubic-bezier(0.16,1,0.3,1), opacity 0.2s, background 0.2s, border-color 0.2s, box-shadow 0.28s cubic-bezier(0.16,1,0.3,1)"},
   label:{fontSize:13,fontWeight:500,letterSpacing:"-0.01em",textTransform:"none",color:C.muted,marginBottom:8,display:"block"},
   inp:{width:"100%",background:"rgba(255,255,255,0.7)",border:`1px solid ${C.border}`,borderRadius:18,padding:"12px 16px",fontFamily:"inherit",fontSize:15,color:C.text,lineHeight:1.4,boxSizing:"border-box",letterSpacing:"-0.2px"},
   muted:{fontSize:15,color:C.muted,lineHeight:1.7,letterSpacing:"-0.2px"}
@@ -158,17 +159,20 @@ let forgotSent = false;
 let codeNote = "";
 
 function shell(inner){
+  const motion = animateScreen ? " lc-screen" : "";
+  animateScreen = true;
   return `
     <div class="login-shell" style="max-width:520px;margin:0 auto;padding:20px 20px 48px;">
       <div class="lc-nav-pill" style="display:flex;align-items:center;justify-content:space-between;padding:10px 14px;border-radius:999px;margin-bottom:28px;gap:12px;">
         <div class="lc-display" style="font-size:20px;font-weight:600;color:${C.text};letter-spacing:-0.02em;padding-left:6px">Lingo<span style="color:${C.accent}">Check</span></div>
         <a href="/" style="text-decoration:none;font-size:13px;font-weight:600;color:${C.muted};border:1px solid ${C.border};padding:8px 14px;border-radius:999px;background:rgba(255,255,255,0.7);white-space:nowrap;">← Back to portal</a>
       </div>
-      <div class="login-card lc-panel" style="animation:rise .55s cubic-bezier(0.22,1,0.36,1);border-radius:28px;padding:28px;${styleStr(st.card)}">${inner}</div>
+      <div class="login-card lc-panel${motion}" style="border-radius:28px;padding:28px;${styleStr(st.card)}">${inner}</div>
     </div>
   `;
 }
 
+let animateScreen = true;
 let offerLanguages = [];
 let signupStep = 0;
 let signupDraft = { displayName:"", email:"", phone:"", password:"", languages:[] };
@@ -304,6 +308,7 @@ function renderSignup(){
       const at = signupDraft.languages.indexOf(lang);
       if(at===-1) signupDraft.languages.push(lang);
       else signupDraft.languages.splice(at, 1);
+      animateScreen = false;
       render();
     });
   });

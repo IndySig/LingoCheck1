@@ -329,6 +329,51 @@ async function sendDeliveryEmail(req, job) {
   }
 }
 
+async function sendQuestionEmail(req, job, question) {
+  const to = String(job?.clientEmail || '').trim();
+  if (!to) return { sent: false, reason: 'no-email' };
+  const token = String(job.deliveryToken || '');
+  const link = token
+    ? `${publicBaseUrl(req)}/d/${encodeURIComponent(job.id)}/${encodeURIComponent(token)}`
+    : `${publicBaseUrl(req)}/`;
+  const lang = job.language || 'your language';
+  const subject = `A reviewer has a question about your ${lang} translation`;
+  const text = [
+    'A reviewer has a question about your LingoCheck translation.',
+    '',
+    question,
+    '',
+    'Reply on your page:',
+    link,
+    '',
+    'If you did not request this, you can ignore this email.'
+  ].join('\n');
+  const html = `<div style="font-family:Arial,sans-serif;max-width:560px;margin:0 auto;padding:24px;color:#1c1430">
+    <p style="font-size:14px;color:#6b6480;margin:0 0 12px">LingoCheck</p>
+    <h1 style="font-size:22px;font-weight:600;margin:0 0 16px">A reviewer has a question</h1>
+    <p style="font-size:15px;line-height:1.6;margin:0 0 16px">Your ${escapeHtml(lang)} translation is still being checked. The reviewer needs an answer before finishing it.</p>
+    <div style="font-size:15px;line-height:1.6;white-space:pre-wrap;background:#f7f5fb;border:1px solid rgba(92,70,168,0.14);border-radius:12px;padding:16px;margin:0 0 20px">${escapeHtml(question)}</div>
+    <p style="margin:0 0 24px"><a href="${escapeHtml(link)}" style="display:inline-block;background:#6d4fd8;color:#ffffff;text-decoration:none;padding:12px 18px;border-radius:10px;font-weight:600">Answer on your page</a></p>
+    <p style="font-size:12px;color:#6b6480;margin:0">If you did not request this, you can ignore this email.</p>
+  </div>`;
+  const resendKey = String(process.env.RESEND_API_KEY || readAuthFile().RESEND_API_KEY || '').trim();
+  const smtp = loadSmtpConfig();
+  if (!resendKey && !smtp.host) {
+    console.log('[LingoCheck] Question email was not sent because email is not configured.');
+    return { sent: false, reason: 'not-configured' };
+  }
+  const from = resendKey
+    ? String(process.env.SMTP_FROM || readAuthFile().SMTP_FROM || 'LingoCheck <noreply@lingocheck.app>').trim()
+    : smtp.from;
+  try {
+    await sendMail({ from, to, subject, text, html });
+    return { sent: true };
+  } catch (err) {
+    console.error('[LingoCheck] Failed to send question email:', err.message);
+    return { sent: false, reason: 'send-failed' };
+  }
+}
+
 function wrapTls(socket, host) {
   return new Promise((resolve, reject) => {
     const secure = tls.connect({ socket, servername: host }, () => resolve(secure));
@@ -1021,13 +1066,46 @@ function promptLanguageName(language) {
   return language || 'English';
 }
 
-async function translateOneSentence(sentence, language, apiKey, sourceLanguage) {
+function jobStyleNote(body) {
+  const tone = security.sanitizeTone(body && body.tone);
+  const purpose = security.sanitizePurpose(body && body.purpose);
+  const glossary = security.sanitizeGlossary(body && body.glossary);
+  const bits = [];
+  if (tone === 'formal') bits.push('Use a formal tone.');
+  if (tone === 'informal') bits.push('Use an informal, conversational tone.');
+  const purposeLine = {
+    hotel: 'The text is hotel guest information. Keep it clear and welcoming.',
+    contract: 'The text is a contract. Keep obligations precise and do not soften legal wording.',
+    legal: 'The text is legal. Keep the wording precise and do not soften obligations.',
+    website: 'The text is website copy. Keep it concise and natural.',
+    marketing: 'The text is marketing copy. Keep the persuasive intent.',
+    email: 'The text is an email. Keep the greeting, request, and sign-off natural.',
+    manual: 'The text is instructions. Keep each step clear and in the same order.',
+    medical: 'The text is medical. Keep clinical terms accurate.',
+    technical: 'The text is technical. Keep product names, units, and procedures exact.',
+    academic: 'The text is academic. Keep the formal register and the claims precise.',
+    menu: 'The text is a menu. Keep dish names appetizing and measurements exact.',
+    product: 'The text is a product description. Keep features and specifications exact.',
+    news: 'The text is news. Keep the facts and do not add colour.',
+    app: 'The text is software interface copy. Keep it short and consistent.',
+    financial: 'The text is financial. Keep figures, conditions, and obligations exact.',
+    tourism: 'The text is travel information. Keep times, places, and practical details exact.',
+    cv: 'The text is a CV. Keep job titles and dates exact and the tone professional.'
+  }[purpose];
+  if (purposeLine) bits.push(purposeLine);
+  if (glossary.length) {
+    bits.push('Use these preferred terms exactly when they appear: ' + glossary.map((pair) => pair.source + ' = ' + pair.target).join('; ') + '.');
+  }
+  return bits.join(' ');
+}
+
+async function translateOneSentence(sentence, language, apiKey, sourceLanguage, styleNote) {
   const text = String(sentence || '').trim();
   if (!text) return '';
   const from = promptLanguageName(sourceLanguage || 'English');
   const to = promptLanguageName(language);
   return callAnthropicTranslation(
-    `Translate the user's ${from} sentence to ${to}. Return ONLY the translated sentence — no quotes or commentary.`,
+    `Translate the user's ${from} sentence to ${to}. ${styleNote || ''} Return ONLY the translated sentence — no quotes or commentary.`,
     text,
     apiKey,
     2048
@@ -1045,18 +1123,18 @@ function splitDelimitedSentences(raw, expectedCount) {
   return parts.slice(0, expectedCount);
 }
 
-async function translateSentenceBatch(sentences, language, apiKey, sourceLanguage) {
+async function translateSentenceBatch(sentences, language, apiKey, sourceLanguage, styleNote) {
   const clean = sentences.map((s) => String(s || '').trim());
   if (!clean.length) return [];
   const from = promptLanguageName(sourceLanguage || 'English');
   const to = promptLanguageName(language);
   const packed = clean.join(SENTENCE_DELIM);
-  const system = `You are a professional translator. Translate each ${from} text unit to ${to}. Units are separated by the Unicode character ␞ (U+241E). You MUST output exactly ${clean.length} translated units in the same order, each separated by ␞. Do not add, remove, merge, split, or reorder units. Return ONLY the translated units with ␞ between them — no labels or commentary.`;
+  const system = `You are a professional translator. Translate each ${from} text unit to ${to}. ${styleNote || ''} Units are separated by the Unicode character ␞ (U+241E). You MUST output exactly ${clean.length} translated units in the same order, each separated by ␞. Do not add, remove, merge, split, or reorder units. Return ONLY the translated units with ␞ between them — no labels or commentary.`;
   const raw = await callAnthropicTranslation(system, packed, apiKey);
   return splitDelimitedSentences(raw, clean.length);
 }
 
-async function translateSentenceList(sentences, language, apiKey, sourceLanguage) {
+async function translateSentenceList(sentences, language, apiKey, sourceLanguage, styleNote) {
   const clean = sentences.map((s) => String(s || '').trim());
   if (!clean.length) return [];
 
@@ -1067,11 +1145,11 @@ async function translateSentenceList(sentences, language, apiKey, sourceLanguage
   const out = [];
   for (let i = 0; i < clean.length; i += SENTENCE_CHUNK_SIZE) {
     const chunk = clean.slice(i, i + SENTENCE_CHUNK_SIZE);
-    let parts = await translateSentenceBatch(chunk, language, apiKey, sourceLanguage);
+    let parts = await translateSentenceBatch(chunk, language, apiKey, sourceLanguage, styleNote);
     if (parts.length !== chunk.length) {
       parts = [];
       for (const sentence of chunk) {
-        parts.push(await translateOneSentence(sentence, language, apiKey, sourceLanguage));
+        parts.push(await translateOneSentence(sentence, language, apiKey, sourceLanguage, styleNote));
       }
     }
     out.push(...parts);
@@ -1090,13 +1168,14 @@ async function handleTranslate(req, res) {
   const sourceLanguage = security.sanitizeLanguage(body.sourceLanguage) || 'English';
   const sourceSentences = security.sanitizeSentenceList(body.sentences);
   const sentenceParaMap = Array.isArray(body.sentenceParaMap) ? body.sentenceParaMap : null;
+  const styleNote = jobStyleNote(body);
   if (!language) return sendJson(res, 400, { error: 'Missing language' });
   if (sourceLanguage === language) return sendJson(res, 400, { error: 'Choose a different target language' });
   const apiKey = loadAnthropicApiKey();
 
   if (sourceSentences && sourceSentences.length) {
     try {
-      const translationSentences = await translateSentenceList(sourceSentences, language, apiKey, sourceLanguage);
+      const translationSentences = await translateSentenceList(sourceSentences, language, apiKey, sourceLanguage, styleNote);
       const translation = security.rebuildTranslationFromSentences(translationSentences, sentenceParaMap)
         || translationSentences.join(' ');
       return sendJson(res, 200, { translation, translationSentences });
@@ -1115,7 +1194,7 @@ async function handleTranslate(req, res) {
 
   try {
     const translation = await callAnthropicTranslation(
-      `You are a professional translation engine. Translate the user's ${promptLanguageName(sourceLanguage)} text to ${promptLanguageName(language)}. The input is divided into paragraphs separated by blank lines (double newlines). You MUST preserve the exact same number of paragraphs in the same order, using double newlines between each translated paragraph. Translate each paragraph completely — do not merge, split, or reorder paragraphs. Return ONLY the translated text — no explanations, no quotes, no preamble.`,
+      `You are a professional translation engine. Translate the user's ${promptLanguageName(sourceLanguage)} text to ${promptLanguageName(language)}. ${styleNote} The input is divided into paragraphs separated by blank lines (double newlines). You MUST preserve the exact same number of paragraphs in the same order, using double newlines between each translated paragraph. Translate each paragraph completely — do not merge, split, or reorder paragraphs. Return ONLY the translated text — no explanations, no quotes, no preamble.`,
       text,
       apiKey
     );
@@ -1167,6 +1246,7 @@ async function handleQaCheck(req, res) {
   const system = [
     `You are a professional ${promptLanguageName(language)} translation editor.`,
     `You will receive a ${promptLanguageName(sourceLanguage)} source and a customer translation in ${promptLanguageName(language)}.`,
+    jobStyleNote(body),
     'Correct the translation only where it misses, adds, or distorts the source, or where it contains a clear AI artifact.',
     'Do not restyle sentences that already say the same thing as the source.',
     'Keep the customer translation’s paragraph breaks. Do not merge, split, or reorder paragraphs unless a paragraph was invented or a source paragraph is missing.',
@@ -1193,6 +1273,90 @@ async function handleQaCheck(req, res) {
     console.error('[LingoCheck] QA check failed:', e?.message || e);
     return sendJson(res, 502, { error: 'Quality check service unavailable' });
   }
+}
+
+function loadClientJob(id, body) {
+  if (!/^[A-Za-z0-9_-]{6,64}$/.test(String(id || ''))) {
+    return { error: { status: 400, error: 'Invalid job' } };
+  }
+  const clientId = security.sanitizeClientId(body && body.clientId);
+  const token = String((body && (body.token || body.t)) || '');
+  if (!clientId && !token) return { error: { status: 400, error: 'clientId is required' } };
+  const jobs = loadJobs();
+  const idx = jobs.findIndex((job) => job.id === id);
+  if (idx === -1 || !security.canAccessJob(jobs[idx], { clientId, token })) {
+    return { error: { status: 404, error: 'Job not found' } };
+  }
+  return { jobs, idx, job: jobs[idx] };
+}
+
+async function handleClientReply(req, res, id) {
+  if (!enforceJsonContentType(req, res)) return;
+  if (!enforceRateLimit(req, res, 'job-reply', { limit: 12, windowMs: 60 * 1000 })) return;
+  const body = await readBodyJson(req);
+  if (!(await requireHuman(req, res, body))) return;
+  const loaded = loadClientJob(id, body);
+  if (loaded.error) return sendJson(res, loaded.error.status, { error: loaded.error.error });
+  const reply = security.sanitizeText(body.reply || '', 1000);
+  if (!reply) return sendJson(res, 400, { error: 'Write a reply first' });
+  if (!loaded.job.clientQuestion) return sendJson(res, 400, { error: 'There is no question to answer' });
+  const repliedAt = Date.now();
+  loaded.jobs[loaded.idx] = {
+    ...loaded.job,
+    questionThread: security.answerLatestQuestion(loaded.job, reply, repliedAt),
+    clientReply: reply,
+    clientRepliedAt: repliedAt
+  };
+  saveJobs(loaded.jobs);
+  return sendJson(res, 200, security.publicJob(loaded.jobs[loaded.idx]));
+}
+
+async function handleClientRevision(req, res, id) {
+  if (!enforceJsonContentType(req, res)) return;
+  if (!enforceRateLimit(req, res, 'job-revision', { limit: 8, windowMs: 60 * 1000 })) return;
+  const body = await readBodyJson(req);
+  if (!(await requireHuman(req, res, body))) return;
+  const loaded = loadClientJob(id, body);
+  if (loaded.error) return sendJson(res, loaded.error.status, { error: loaded.error.error });
+  if (loaded.job.status !== 'complete') return sendJson(res, 400, { error: 'The review is not finished yet' });
+  if ((Number(loaded.job.revisionRound) | 0) >= 1) {
+    return sendJson(res, 400, { error: 'This job already used its correction round' });
+  }
+  const note = security.sanitizeText(body.note || '', 2000);
+  if (!note) return sendJson(res, 400, { error: 'Say what should be changed' });
+  loaded.jobs[loaded.idx] = {
+    ...loaded.job,
+    status: 'awaiting_review',
+    revisionRound: 1,
+    revisionNote: note,
+    revisionRequestedAt: Date.now(),
+    claimedByRevisorId: null,
+    claimedAt: null
+  };
+  saveJobs(loaded.jobs);
+  return sendJson(res, 200, security.publicJob(loaded.jobs[loaded.idx]));
+}
+
+async function handleRevisorQuestion(req, res, id, session) {
+  if (!enforceJsonContentType(req, res)) return;
+  if (!enforceRateLimit(req, res, 'revisor-question', { limit: 12, windowMs: 60 * 1000 })) return;
+  const body = await readBodyJson(req);
+  const loaded = loadClaimedJob(id, session);
+  if (loaded.error) return sendJson(res, loaded.error.status, { error: loaded.error.error });
+  const question = security.sanitizeText(body.question || '', 1000);
+  if (!question) return sendJson(res, 400, { error: 'Write the question first' });
+  const askedAt = Date.now();
+  loaded.jobs[loaded.idx] = {
+    ...loaded.job,
+    questionThread: security.appendQuestion(loaded.job, question, askedAt),
+    clientQuestion: question,
+    clientQuestionAt: askedAt,
+    clientReply: ''
+  };
+  saveJobs(loaded.jobs);
+  const saved = loaded.jobs[loaded.idx];
+  const mail = await sendQuestionEmail(req, saved, question);
+  return sendJson(res, 200, { ...security.revisorJob(saved), emailSent: !!mail.sent });
 }
 
 async function handleJobsCreate(req, res) {
@@ -1440,12 +1604,24 @@ async function handleRevisorPreview(req, res, id, session) {
   if (!status.ready) return sendJson(res, 503, { error: status.message || 'Word preview is not available' });
   const stored = filePacks.loadPack(packId);
   try {
+    let previewTranslations = translations;
+    const parsed = okapi.parseXliff(stored.xliffXml);
+    const expected = parsed.sentences.length;
+    const storedSentences = Array.isArray(job.translationSentences)
+      ? job.translationSentences.map((sentence) => String(sentence || ''))
+      : [];
+    if (expected && storedSentences.length === expected && (!previewTranslations || previewTranslations.length !== expected)) {
+      const norm = (value) => String(value || '').replace(/\s+/g, ' ').trim();
+      const storedNorm = norm(storedSentences.join(' '));
+      const requestNorm = norm(previewTranslations && previewTranslations.length ? previewTranslations.join(' ') : fullText);
+      if (storedNorm && storedNorm === requestNorm) previewTranslations = storedSentences;
+    }
     const out = okapi.mergeDocx(stored.original, stored.xliffXml, {
       skeletons: stored.skeletons,
       sourceLang: stored.sourceLang,
       targetLang: stored.targetLang,
       fileName: stored.fileName || 'document.docx',
-      translations: translations || undefined,
+      translations: previewTranslations || undefined,
       fullText
     });
     return sendBytes(res, 200, out, 'application/vnd.openxmlformats-officedocument.wordprocessingml.document');
@@ -1985,6 +2161,10 @@ const server = http.createServer(async (req, res) => {
       return sendJson(res, 200, security.publicJob(job));
     }
     if (method === 'POST' && pathname === '/api/jobs') return await handleJobsCreate(req, res);
+    const replyMatch = pathname.match(/^\/api\/jobs\/([A-Za-z0-9_-]{6,64})\/reply$/);
+    if (method === 'POST' && replyMatch) return await handleClientReply(req, res, replyMatch[1]);
+    const revisionMatch = pathname.match(/^\/api\/jobs\/([A-Za-z0-9_-]{6,64})\/revision$/);
+    if (method === 'POST' && revisionMatch) return await handleClientRevision(req, res, revisionMatch[1]);
     if (method === 'POST' && pathname === '/api/translate') return await handleTranslate(req, res);
     if (method === 'POST' && pathname === '/api/qa-check') return await handleQaCheck(req, res);
 
@@ -2070,6 +2250,11 @@ const server = http.createServer(async (req, res) => {
       if (method === 'GET' && revisorSourceMatch) {
         if (!enforceRateLimit(req, res, 'revisor-source', { limit: 20, windowMs: 60 * 1000 })) return;
         return handleRevisorSource(req, res, revisorSourceMatch[1], session);
+      }
+
+      const questionMatch = pathname.match(/^\/api\/revisor\/jobs\/([^/]+)\/question$/);
+      if (method === 'POST' && questionMatch) {
+        return await handleRevisorQuestion(req, res, questionMatch[1], session);
       }
 
       // PATCH /api/revisor/jobs/:id

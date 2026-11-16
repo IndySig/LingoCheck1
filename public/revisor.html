@@ -118,7 +118,13 @@
     background:#ffffff;
   }
   .docx-wrapper{background:#f6f3ee!important;padding:16px!important;}
+  .lc-questions{margin-top:8px;}
+  .lc-questions summary{cursor:pointer;font-size:12px;font-weight:600;color:var(--accent);list-style:none;}
+  .lc-questions summary::-webkit-details-marker{display:none;}
+  .lc-questions summary::before{content:"▸ ";}
+  .lc-questions[open] summary::before{content:"▾ ";}
 </style>
+<link rel="stylesheet" href="/motion.css">
 </head>
 <body>
 <div id="root"></div>
@@ -128,7 +134,7 @@ const {useState,useEffect,useCallback,useMemo,useRef}=React;
 const C={deep:"#2a2438",mid:"#5b3fc4",accent:"#6d4fd8",light:"#6d4fd8",pale:"#6d4fd8",lilac:"#d9d0f5",surface:"#ffffff",card:"#ffffff",border:"rgba(42,36,56,0.10)",text:"#2a2438",muted:"#6a6178",white:"#ffffff",green:"#1f7a4d",greenBg:"rgba(238,247,241,0.9)",greenBorder:"rgba(31,122,77,0.18)",amber:"#8a6800",amberBg:"rgba(255,248,230,0.9)",amberBorder:"rgba(138,104,0,0.18)",soft:"rgba(255,255,255,0.55)"};
 const st={
   card:{background:"rgba(255,255,255,0.72)",border:"1px solid rgba(255,255,255,0.8)",borderRadius:24,padding:28,boxShadow:"0 20px 60px rgba(42,36,56,0.08)"},
-  btn:{fontFamily:"inherit",cursor:"pointer",border:"none",borderRadius:999,fontWeight:600,transition:"transform 0.2s cubic-bezier(0.22,1,0.36,1), opacity 0.2s, background 0.2s, border-color 0.2s, box-shadow 0.2s"},
+  btn:{fontFamily:"inherit",cursor:"pointer",border:"none",borderRadius:999,fontWeight:600,transition:"transform 0.28s cubic-bezier(0.16,1,0.3,1), opacity 0.2s, background 0.2s, border-color 0.2s, box-shadow 0.28s cubic-bezier(0.16,1,0.3,1)"},
   label:{fontSize:13,fontWeight:500,letterSpacing:"-0.01em",textTransform:"none",color:C.muted,marginBottom:8,display:"block"},
   ta:{width:"100%",background:"rgba(255,255,255,0.7)",border:`1px solid ${C.border}`,borderRadius:18,padding:14,fontFamily:"inherit",fontSize:15,color:C.text,lineHeight:1.7,resize:"vertical",boxSizing:"border-box",letterSpacing:"-0.2px"},
   muted:{fontSize:14,color:C.muted,lineHeight:1.65,letterSpacing:"-0.2px"}
@@ -510,6 +516,13 @@ function RevisorApp(){
   const updateJob=async(id,patch)=>apiFetch(`/api/revisor/jobs/${id}`,{method:"PATCH",body:JSON.stringify(patch)})
     .then(j=>{setAllJobs(prev=>prev.map(x=>x.id===id?j:x));return j;});
 
+  function rememberJob(job){
+    if(!job||!job.id) return;
+    const next={...job};
+    delete next.emailSent;
+    setAllJobs(prev=>prev.map(x=>x.id===next.id?{...x,...next}:x));
+  }
+
   async function claimJob(id){
     const j=await apiFetch(`/api/revisor/jobs/${id}/claim`,{method:"POST"});
     setAllJobs(prev=>{
@@ -536,7 +549,7 @@ function RevisorApp(){
     );
   }
 
-  return React.createElement(RevisorView,{me,setMe,allJobs,tab,setTab,updateJob,claimJob,unclaimJob,focusJobId,setFocusJobId,payoutRate,offerLanguages,onLogout:logout});
+  return React.createElement(RevisorView,{me,setMe,allJobs,tab,setTab,updateJob,claimJob,unclaimJob,rememberJob,focusJobId,setFocusJobId,payoutRate,offerLanguages,onLogout:logout});
 }
 
 function Header({me,tab,setTab,onLogout,counts,isCompact}){
@@ -745,7 +758,47 @@ function propagateWordNodes(e, oldText, newText){
   });
 }
 
-function ReviewEditor({selectedJob,updateJob,unclaimJob,onDone,onReleased,isCompact,payoutRate,revisorId}){
+function questionItems(job){
+  if(!job) return [];
+  const raw = Array.isArray(job.questionThread) ? job.questionThread : [];
+  const items = raw.map(item=>({
+    question: String(item && item.question || "").trim(),
+    reply: String(item && item.reply || "").trim(),
+    askedAt: item && item.askedAt || null
+  })).filter(item=>item.question);
+  if(!items.length && job.clientQuestion){
+    items.push({
+      question: String(job.clientQuestion).trim(),
+      reply: String(job.clientReply || "").trim(),
+      askedAt: job.clientQuestionAt || null
+    });
+  }
+  return items;
+}
+
+function QuestionHistory({job}){
+  const e=React.createElement;
+  const items = questionItems(job);
+  if(!items.length) return null;
+  const waiting = items.filter(item=>!item.reply).length;
+  return e("details",{className:"lc-questions"},
+    e("summary",null,"Questions and answers ("+items.length+")"+(waiting?" · "+waiting+" waiting":"")),
+    e("div",{style:{marginTop:8}},
+      items.map((item,i)=>e("div",{key:i,style:{marginTop:i?10:0,paddingTop:i?10:0,borderTop:i?`1px solid ${C.border}`:"none"}},
+        e("div",{style:{fontSize:11,fontWeight:600,color:C.accent,marginBottom:3}},
+          "Question "+(i+1),
+          item.askedAt?e("span",{style:{fontWeight:500,color:C.muted}}," · "+formatDateTime(item.askedAt)):null
+        ),
+        e("div",{style:{whiteSpace:"pre-wrap"}},item.question),
+        item.reply
+          ? e("div",{style:{marginTop:4,color:C.muted,whiteSpace:"pre-wrap"}},"Answer: ",item.reply)
+          : e("div",{style:{marginTop:4,color:C.muted}},"Waiting for an answer")
+      ))
+    )
+  );
+}
+
+function ReviewEditor({selectedJob,updateJob,unclaimJob,onDone,onReleased,isCompact,payoutRate,revisorId,rememberJob}){
   const e=React.createElement;
   const[editedText,setEditedText]=useState(selectedJob.revisedTranslation||selectedJob.aiTranslation||"");
   const[mode,setMode]=useState("sentences");
@@ -757,6 +810,8 @@ function ReviewEditor({selectedJob,updateJob,unclaimJob,onDone,onReleased,isComp
   const[saving,setSaving]=useState(false);
   const[releasing,setReleasing]=useState(false);
   const[savedNote,setSavedNote]=useState("");
+  const[questionText,setQuestionText]=useState("");
+  const[asking,setAsking]=useState(false);
   const[customerSentences,setCustomerSentences]=useState([]);
   const[aiSentences,setAiSentences]=useState([]);
   const[sentenceStatus,setSentenceStatus]=useState([]);
@@ -1302,6 +1357,24 @@ function ReviewEditor({selectedJob,updateJob,unclaimJob,onDone,onReleased,isComp
     }
   }
 
+  async function sendQuestion(){
+    const question = questionText.trim();
+    if(!question){ setSavedNote("Write the question first."); return; }
+    setAsking(true);
+    try{
+      const data = await apiFetch("/api/revisor/jobs/"+encodeURIComponent(selectedJob.id)+"/question",{method:"POST",body:JSON.stringify({question})});
+      if(data&&data.id&&rememberJob) rememberJob(data);
+      setQuestionText("");
+      setSavedNote(data && data.emailSent
+        ? "Question sent by email. The client can also answer on their page."
+        : "Question saved on the client page. The email could not be sent.");
+    }catch(ex){
+      setSavedNote(ex.message || "Could not send the question");
+    }finally{
+      setAsking(false);
+    }
+  }
+
   async function handleSaveDraft(){
     const { finalText, patch } = draftPayload();
     if(!finalText){ alert("Nothing to save yet."); return; }
@@ -1479,7 +1552,7 @@ function ReviewEditor({selectedJob,updateJob,unclaimJob,onDone,onReleased,isComp
     }
   }
 
-  return e("div",{style:{animation:"fadeUp 0.25s ease"}},
+  return e("div",{style:{animation:"lc-screen 0.62s cubic-bezier(0.16, 1, 0.3, 1)"}},
     e("div",{style:{display:"flex",alignItems:"center",justifyContent:"space-between",gap:10,marginBottom:10,flexWrap:"wrap"}},
       e("span",{style:{...st.label,marginBottom:0}},selectedJob.qaOnly?"Review source and checked translation":"Review & edit translation"),
       e("div",{style:{display:"flex",alignItems:"center",gap:10,flexWrap:"wrap"}},
@@ -1684,6 +1757,12 @@ function ReviewEditor({selectedJob,updateJob,unclaimJob,onDone,onReleased,isComp
           );
         })
       ),
+    e("div",{style:{background:C.soft,border:`1px solid ${C.border}`,borderRadius:10,padding:"12px 14px",marginBottom:14}},
+      e("div",{style:{fontSize:13,fontWeight:600,color:C.text,marginBottom:6}},"Ask the client"),
+      e(QuestionHistory,{job:selectedJob}),
+      e("textarea",{value:questionText,onChange:ev=>setQuestionText(ev.target.value),placeholder:"Ask one question before you send the file",maxLength:1000,style:{...st.ta,minHeight:72,marginBottom:8}}),
+      e("button",{type:"button",onClick:sendQuestion,disabled:asking||sending,style:{...st.btn,background:"transparent",border:`1px solid ${C.border}`,color:C.text,padding:"8px 14px",fontSize:13}},asking?"Sending…":"Send question")
+    ),
     e("div",{style:{background:C.soft,border:`1px solid ${C.border}`,borderRadius:10,padding:"11px 14px",marginBottom:14,fontSize:12,color:C.muted}},"Save a draft anytime. Send to client when the review is finished — or release the job back to the queue."),
     savedNote&&e("div",{style:{fontSize:12,color:C.green,marginBottom:10}},savedNote),
     uncheckedLeft>0&&e("div",{style:{fontSize:13,color:C.amber,background:C.amberBg,border:`1px solid ${C.amberBorder}`,borderRadius:10,padding:"10px 14px",marginBottom:10}},
@@ -1730,7 +1809,7 @@ function ReviewEditor({selectedJob,updateJob,unclaimJob,onDone,onReleased,isComp
   );
 }
 
-function MyAssignmentsTab({me,allJobs,updateJob,unclaimJob,focusJobId,setFocusJobId,isCompact,payoutRate}){
+function MyAssignmentsTab({me,allJobs,updateJob,unclaimJob,rememberJob,focusJobId,setFocusJobId,isCompact,payoutRate}){
   const e=React.createElement;
   const isWide=useMedia("(min-width: 900px)");
   const[selectedId,setSelectedId]=useState(null);
@@ -1856,9 +1935,10 @@ function MyAssignmentsTab({me,allJobs,updateJob,unclaimJob,focusJobId,setFocusJo
                 selectedJob.customerTranslation&&e("div",{style:{marginTop:14,padding:12,border:`1px solid ${C.border}`,borderRadius:10,background:C.soft,maxHeight:320,overflow:"auto"}},
                   e("div",{style:{fontSize:12,color:C.muted,marginBottom:8}},"LingoCheck changes"),
                   e(MarkedTranslation,{customerText:selectedJob.customerTranslation,checkedText:selectedJob.aiTranslation||""})
-                )
+                ),
+                e(QuestionHistory,{job:selectedJob})
               )
-            : e(ReviewEditor,{selectedJob,updateJob,unclaimJob,payoutRate,revisorId:me.revisorId,onDone:()=>{setJustSent(true); setTimeout(()=>setJustSent(false),3500);},onReleased:()=>{setSelectedId(null);setShowList(true);},isCompact})
+            : e(ReviewEditor,{selectedJob,updateJob,unclaimJob,rememberJob,payoutRate,revisorId:me.revisorId,onDone:()=>{setJustSent(true); setTimeout(()=>setJustSent(false),3500);},onReleased:()=>{setSelectedId(null);setShowList(true);},isCompact})
         )
       : (!showList && e("div",{style:st.muted},"Select an assignment to open it."))
   );
@@ -2002,7 +2082,7 @@ function AccountTab({me,setMe,offerLanguages,isCompact}){
   );
 }
 
-function RevisorView({me,setMe,allJobs,tab,setTab,updateJob,claimJob,unclaimJob,focusJobId,setFocusJobId,payoutRate,offerLanguages,onLogout}){
+function RevisorView({me,setMe,allJobs,tab,setTab,updateJob,claimJob,unclaimJob,rememberJob,focusJobId,setFocusJobId,payoutRate,offerLanguages,onLogout}){
   const e=React.createElement;
   const isCompact=!useMedia("(min-width: 768px)");
 
@@ -2013,9 +2093,9 @@ function RevisorView({me,setMe,allJobs,tab,setTab,updateJob,claimJob,unclaimJob,
 
   return e("div",{style:{maxWidth:1280,margin:"0 auto",padding:isCompact?"0 16px 40px":"0 24px 48px"}},
     e(Header,{me,tab,setTab,onLogout,counts,isCompact}),
-    e("div",{style:{animation:"rise 0.45s var(--ease)"}},
+    e("div",{key:tab,className:"lc-screen"},
       tab==="queue" && e(QueueTab,{me,allJobs,claimJob,setTab,setFocusJobId,isCompact,payoutRate}),
-      tab==="mine" && e(MyAssignmentsTab,{me,allJobs,updateJob,unclaimJob,focusJobId,setFocusJobId,isCompact,payoutRate}),
+      tab==="mine" && e(MyAssignmentsTab,{me,allJobs,updateJob,unclaimJob,rememberJob,focusJobId,setFocusJobId,isCompact,payoutRate}),
       tab==="finance" && e(FinanceTab,{me,allJobs,isCompact,payoutRate}),
       tab==="account" && e(AccountTab,{me,setMe,offerLanguages,isCompact})
     )

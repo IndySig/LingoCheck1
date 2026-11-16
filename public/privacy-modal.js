@@ -1,8 +1,10 @@
 (function () {
   var style = document.createElement("style");
   style.textContent = [
-    ".lc-privacy-overlay{position:fixed;inset:0;z-index:100;background:rgba(42,36,56,0.45);display:flex;align-items:center;justify-content:center;padding:18px;}",
-    ".lc-privacy-dialog{background:#fffdf8;color:#2a2438;width:min(720px,100%);max-height:min(86vh,820px);border-radius:28px;display:flex;flex-direction:column;box-shadow:0 20px 60px rgba(42,36,56,0.18);font-family:Manrope,system-ui,sans-serif;}",
+    "@keyframes lc-privacy-in{from{opacity:0}to{opacity:1}}",
+    "@keyframes lc-privacy-panel{from{opacity:0;transform:translateY(28px) scale(0.975)}to{opacity:1;transform:none}}",
+    ".lc-privacy-overlay{position:fixed;inset:0;z-index:100;background:rgba(42,36,56,0.45);display:flex;align-items:center;justify-content:center;padding:18px;animation:lc-privacy-in .2s ease;}",
+    ".lc-privacy-dialog{background:#fffdf8;color:#2a2438;width:min(720px,100%);max-height:min(86vh,820px);border-radius:28px;display:flex;flex-direction:column;box-shadow:0 20px 60px rgba(42,36,56,0.18);font-family:Manrope,system-ui,sans-serif;animation:lc-privacy-panel .55s cubic-bezier(0.16,1,0.3,1);}",
     ".lc-privacy-bar{display:flex;justify-content:flex-end;gap:8px;padding:14px 16px;border-bottom:1px solid rgba(42,36,56,0.10);flex-shrink:0;}",
     ".lc-privacy-full,.lc-privacy-close{font-family:inherit;font-weight:600;font-size:13px;border-radius:999px;padding:8px 14px;cursor:pointer;}",
     ".lc-privacy-full{background:#6d4fd8;color:#fff;text-decoration:none;border:none;}",
@@ -40,7 +42,11 @@
     document.body.style.overflow = "hidden";
     dialog = document.createElement("div");
     dialog.className = "lc-privacy-overlay";
-    dialog.innerHTML = '<div class="lc-privacy-dialog" role="dialog" aria-modal="true" aria-labelledby="lc-privacy-title" tabindex="-1"><div class="lc-privacy-bar"><a class="lc-privacy-full" href="/privacy" data-privacy-full>Full page</a><button type="button" class="lc-privacy-close">Close</button></div><div class="lc-privacy-body"><p class="note">Loading…</p></div></div>';
+    var from = "home";
+    if (location.pathname === "/revisor") from = "revisor";
+    else if (location.pathname === "/login") from = "login";
+    else if (location.pathname === "/about") from = "about";
+    dialog.innerHTML = '<div class="lc-privacy-dialog" role="dialog" aria-modal="true" aria-labelledby="lc-privacy-title" tabindex="-1"><div class="lc-privacy-bar"><a class="lc-privacy-full" href="/privacy?from=' + from + '" data-privacy-full>Full page</a><button type="button" class="lc-privacy-close">Close</button></div><div class="lc-privacy-body"><p class="note">Loading…</p></div></div>';
     document.body.appendChild(dialog);
     var panel = dialog.querySelector(".lc-privacy-dialog");
     panel.focus();
